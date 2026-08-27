@@ -1,0 +1,10 @@
+const XLSX = require('xlsx');
+const path = require('path');
+const file = path.join('data', 'IBERIAN_Plantilla_Preguntas.xlsx');
+const wb = XLSX.readFile(file);
+console.log('Hojas:', wb.SheetNames);
+const sheet = wb.Sheets[wb.SheetNames[0]];
+const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+console.log('Filas:', rows.length);
+if (rows[0]) console.log('Columnas:', Object.keys(rows[0]));
+if (rows[0]) console.log('Primera fila:', rows[0]);

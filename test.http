@@ -1,0 +1,39 @@
+POST http://localhost:3000/api/ia/generar-plan
+Content-Type: application/json
+
+{
+  "uid": "test123",
+  "fechaExamen": "2027-06-15",
+  "horasDiarias": 4,
+  "diasDescanso": ["Domingos"],
+  "temasDificiles": ["Tema 7"],
+  "tiempoEstudiando": "2 meses",
+  "objetivo": "nota-alta",
+  "nivelFatiga": "medio",
+  "dispositivo": "todos",
+  "porcentajeDominio": {
+    "Tema 1": 85,
+    "Tema 2": 80,
+    "Tema 3": 75,
+    "Tema 4": 70
+  },
+  "historial": {
+    "totalTests": 45,
+    "tasaAcierto": 65,
+    "promedioHoras": 3.5,
+    "temasMasFallados": ["Tema 7"],
+    "temasMasAcertados": ["Tema 1"],
+    "tendencia": "mejorando",
+    "nivelCompromiso": "alto",
+    "ritmoEstudio": "constante",
+    "ultimaSemana": {
+      "tests": 10,
+      "aciertos": 7
+    },
+    "racha": 5
+  },
+  "estadoAnimo": "motivado",
+  "mensajeUsuario": "Hoy me siento con energía",
+  "tendenciaEmocional": "mejorando",
+  "estadosRecientes": ["motivado", "neutro"]
+}

@@ -1,0 +1,336 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "IA Coach Plan Schema",
+  "description": "Esquema de validación para el plan de estudio generado por la IA",
+  "type": "object",
+  "required": [
+    "version",
+    "fechaGeneracion",
+    "usuario",
+    "resumen",
+    "planSemanal",
+    "calendario",
+    "predicciones",
+    "modoIntensivo",
+    "analisisPostTest",
+    "testsPersonalizados",
+    "perfil",
+    "logros",
+    "planB",
+    "rutinasDescanso",
+    "recomendacionesMaterial",
+    "guiasSupervivencia",
+    "mensajesMotivacion",
+    "alertas",
+    "ultimaActualizacion"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "fechaGeneracion": {
+      "type": "string",
+      "format": "date"
+    },
+    "usuario": {
+      "type": "object",
+      "required": ["fechaExamen", "diasHastaExamen", "horasDiarias", "objetivo"],
+      "properties": {
+        "nombre": { "type": "string" },
+        "fechaExamen": { "type": "string", "format": "date" },
+        "diasHastaExamen": { "type": "number", "minimum": 0 },
+        "horasDiarias": { "type": "number", "minimum": 0.5, "maximum": 24 },
+        "objetivo": { "type": "string", "enum": ["aprobar", "nota-alta", "nota-maxima"] },
+        "nivelFatiga": { "type": "string", "enum": ["bajo", "medio", "alto"] },
+        "estadoAnimo": { "type": "string", "enum": ["motivado", "cansado", "frustrado", "ansioso", "neutro"] }
+      }
+    },
+    "resumen": {
+      "type": "object",
+      "properties": {
+        "totalTests": { "type": "number", "minimum": 0 },
+        "tasaAcierto": { "type": "number", "minimum": 0, "maximum": 100 },
+        "racha": { "type": "number", "minimum": 0 },
+        "progresoGlobal": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "planSemanal": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["semana", "objetivoSemana", "metaTests", "metaHoras", "dias"],
+        "properties": {
+          "semana": { "type": "number", "minimum": 1 },
+          "fechaInicio": { "type": "string", "format": "date" },
+          "fechaFin": { "type": "string", "format": "date" },
+          "objetivoSemana": { "type": "string" },
+          "metaTests": { "type": "number", "minimum": 0 },
+          "metaHoras": { "type": "number", "minimum": 0 },
+          "dias": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["dia", "fecha", "metaHoras", "descanso", "sesiones"],
+              "properties": {
+                "dia": { "type": "string" },
+                "fecha": { "type": "string", "format": "date" },
+                "metaHoras": { "type": "number", "minimum": 0 },
+                "descanso": { "type": "boolean" },
+                "sesiones": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["hora", "duracion", "actividad", "descripcion", "objetivo"],
+                    "properties": {
+                      "hora": { "type": "string" },
+                      "duracion": { "type": "number", "minimum": 0 },
+                      "actividad": {
+                        "type": "string",
+                        "enum": ["teoria", "tests", "simulacro", "repaso", "psicotecnicos", "ortografia", "verbal"]
+                      },
+                      "tema": { "type": "string" },
+                      "descripcion": { "type": "string" },
+                      "objetivo": { "type": "string" },
+                      "completado": { "type": "boolean" }
+                    }
+                  }
+                },
+                "rutinaDescanso": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "calendario": {
+      "type": "object",
+      "required": ["fases", "hitos"],
+      "properties": {
+        "fases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["nombre", "semanas", "descripcion", "prioridad"],
+            "properties": {
+              "nombre": { "type": "string" },
+              "semanas": {
+                "type": "array",
+                "items": { "type": "number" }
+              },
+              "descripcion": { "type": "string" },
+              "prioridad": { "type": "string", "enum": ["alta", "media", "baja"] }
+            }
+          }
+        },
+        "hitos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["fecha", "descripcion", "completado"],
+            "properties": {
+              "fecha": { "type": "string", "format": "date" },
+              "descripcion": { "type": "string" },
+              "completado": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "predicciones": {
+      "type": "object",
+      "required": ["notaEstimada", "notaProyectada", "probabilidadAprobar"],
+      "properties": {
+        "notaEstimada": { "type": "number", "minimum": 0, "maximum": 10 },
+        "notaObjetivo": { "type": "number", "minimum": 0, "maximum": 10 },
+        "notaProyectada": { "type": "number", "minimum": 0, "maximum": 10 },
+        "probabilidadAprobar": { "type": "string", "pattern": "^[0-9]+%$" },
+        "margenMejora": { "type": "number" },
+        "recomendaciones": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "modoIntensivo": {
+      "type": "object",
+      "required": ["activo", "diasRestantes"],
+      "properties": {
+        "activo": { "type": "boolean" },
+        "diasRestantes": { "type": "number", "minimum": 0 },
+        "recomendaciones": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "analisisPostTest": {
+      "type": "object",
+      "required": ["fallosPorTema", "recomendacionRefuerzo", "tiempoMejora", "tendencia", "mensajeFeedback"],
+      "properties": {
+        "fallosPorTema": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        },
+        "recomendacionRefuerzo": { "type": "string" },
+        "tiempoMejora": { "type": "string" },
+        "tendencia": { "type": "string" },
+        "mensajeFeedback": { "type": "string" }
+      }
+    },
+    "testsPersonalizados": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tema", "numPreguntas", "dificultad", "motivo", "fechaRecomendada"],
+        "properties": {
+          "tema": { "type": "string" },
+          "numPreguntas": { "type": "number", "minimum": 1 },
+          "dificultad": { "type": "string", "enum": ["facil", "media", "dificil"] },
+          "motivo": { "type": "string" },
+          "fechaRecomendada": { "type": "string", "format": "date" }
+        }
+      }
+    },
+    "perfil": {
+      "type": "object",
+      "required": ["principal", "descripcion", "consejos", "recomendaciones"],
+      "properties": {
+        "principal": { "type": "string" },
+        "descripcion": { "type": "string" },
+        "consejos": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "recomendaciones": {
+          "type": "object",
+          "required": ["duracionSesiones", "numeroTestsDiarios", "dificultadRecomendada"],
+          "properties": {
+            "duracionSesiones": { "type": "number", "minimum": 0 },
+            "numeroTestsDiarios": { "type": "number", "minimum": 0 },
+            "dificultadRecomendada": { "type": "string", "enum": ["facil", "media", "dificil"] }
+          }
+        }
+      }
+    },
+    "logros": {
+      "type": "object",
+      "required": ["desbloqueados", "siguientes"],
+      "properties": {
+        "desbloqueados": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["nombre", "descripcion", "fecha"],
+            "properties": {
+              "nombre": { "type": "string" },
+              "descripcion": { "type": "string" },
+              "fecha": { "type": "string", "format": "date" }
+            }
+          }
+        },
+        "siguientes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["nombre", "descripcion", "progreso"],
+            "properties": {
+              "nombre": { "type": "string" },
+              "descripcion": { "type": "string" },
+              "progreso": { "type": "string", "pattern": "^[0-9]+%$" }
+            }
+          }
+        }
+      }
+    },
+    "planB": {
+      "type": "object",
+      "required": ["activo", "motivo", "acciones"],
+      "properties": {
+        "activo": { "type": "boolean" },
+        "motivo": { "type": "string" },
+        "acciones": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "rutinasDescanso": {
+      "type": "object",
+      "required": ["diarias", "nocturnas"],
+      "properties": {
+        "diarias": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "nocturnas": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "recomendacionesMaterial": {
+      "type": "object",
+      "required": ["general", "porArea"],
+      "properties": {
+        "general": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "porArea": {
+          "type": "object",
+          "required": ["psicotecnicos", "ortografia", "verbal", "legislacion"],
+          "properties": {
+            "psicotecnicos": { "type": "string" },
+            "ortografia": { "type": "string" },
+            "verbal": { "type": "string" },
+            "legislacion": { "type": "string" }
+          }
+        }
+      }
+    },
+    "guiasSupervivencia": {
+      "type": "object",
+      "required": ["frustracion", "ansiedad", "cansancio", "motivacion"],
+      "properties": {
+        "frustracion": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ansiedad": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cansancio": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "motivacion": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "mensajesMotivacion": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "alertas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["nivel", "mensaje"],
+        "properties": {
+          "nivel": { "type": "string", "enum": ["info", "warning", "danger", "success"] },
+          "mensaje": { "type": "string" },
+          "accion": { "type": "string" }
+        }
+      }
+    },
+    "ultimaActualizacion": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+const XLSX = require('xlsx');
+const path = require('path');
+const file = path.join('data', 'IBERIAN_Plantilla_Preguntas.xlsx');
+const fs = require('fs');
+const st = fs.statSync(file);
+console.log('Tamaño bytes:', st.size);
+const wb = XLSX.readFile(file);
+const name = wb.SheetNames[0];
+const sheet = wb.Sheets[name];
+console.log('Hoja:', name);
+console.log('¡ref (rango):', sheet['!ref']);
+console.log('Celdas (claves):', Object.keys(sheet).filter(k => !k.startsWith('!')).slice(0, 30));
+console.log('A1:', sheet['A1']);
+console.log('B1:', sheet['B1']);
+console.log('G1:', sheet['G1']);
+console.log('A2:', sheet['A2']);
+console.log('G2:', sheet['G2']);
