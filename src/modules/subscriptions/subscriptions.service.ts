@@ -43,6 +43,30 @@ export class SubscriptionsService {
   }
 
   // ============================================================
+  // ¿ES ADMINISTRADOR?
+  // ============================================================
+
+  private async isAdmin(userId: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+      select: {
+        role: true,
+      },
+    });
+
+    if (!user) {
+      return false;
+    }
+
+    return (
+      user.role === 'ADMIN' ||
+      user.role === 'SUPER_ADMIN'
+    );
+  }
+
+  // ============================================================
   // SUSCRIPCIÓN
   // ============================================================
 
@@ -87,6 +111,17 @@ export class SubscriptionsService {
   // ============================================================
 
   async isPremium(userId: string): Promise<boolean> {
+    /**
+     * ADMIN y SUPER_ADMIN tienen acceso Premium
+     * independientemente de su suscripción.
+     *
+     * Esto permite administrar y probar la aplicación
+     * sin necesidad de tener una suscripción de pago.
+     */
+    if (await this.isAdmin(userId)) {
+      return true;
+    }
+
     const sub = await this.getSubscription(userId);
 
     return (
@@ -127,14 +162,15 @@ export class SubscriptionsService {
   async getQuestionsUsedToday(userId: string): Promise<number> {
     const today = this.getToday();
 
-    const usage = await this.prisma.dailyQuestionUsage.findUnique({
-      where: {
-        userId_date: {
-          userId,
-          date: today,
+    const usage =
+      await this.prisma.dailyQuestionUsage.findUnique({
+        where: {
+          userId_date: {
+            userId,
+            date: today,
+          },
         },
-      },
-    });
+      });
 
     return usage?.questionsUsed ?? 0;
   }
@@ -143,7 +179,9 @@ export class SubscriptionsService {
   // PREGUNTAS RESTANTES HOY
   // ============================================================
 
-  async getQuestionsRemainingToday(userId: string): Promise<number> {
+  async getQuestionsRemainingToday(
+    userId: string,
+  ): Promise<number> {
     const limits = await this.getLimits(userId);
 
     if (limits.dailyQuestions === Infinity) {
@@ -152,14 +190,20 @@ export class SubscriptionsService {
 
     const used = await this.getQuestionsUsedToday(userId);
 
-    return Math.max(limits.dailyQuestions - used, 0);
+    return Math.max(
+      limits.dailyQuestions - used,
+      0,
+    );
   }
 
   // ============================================================
   // COMPROBAR SI PUEDE CONSUMIR PREGUNTAS
   // ============================================================
 
-  async canAnswerQuestions(userId: string, count = 1): Promise<void> {
+  async canAnswerQuestions(
+    userId: string,
+    count = 1,
+  ): Promise<void> {
     if (!Number.isInteger(count) || count < 1) {
       throw new ForbiddenException(
         'La cantidad de preguntas no es válida.',
@@ -172,8 +216,13 @@ export class SubscriptionsService {
       return;
     }
 
-    const used = await this.getQuestionsUsedToday(userId);
-    const remaining = Math.max(limits.dailyQuestions - used, 0);
+    const used =
+      await this.getQuestionsUsedToday(userId);
+
+    const remaining = Math.max(
+      limits.dailyQuestions - used,
+      0,
+    );
 
     if (count > remaining) {
       throw new ForbiddenException(
@@ -195,26 +244,30 @@ export class SubscriptionsService {
 
     const today = this.getToday();
 
-    const usage = await this.prisma.dailyQuestionUsage.upsert({
-      where: {
-        userId_date: {
+    const usage =
+      await this.prisma.dailyQuestionUsage.upsert({
+        where: {
+          userId_date: {
+            userId,
+            date: today,
+          },
+        },
+        create: {
           userId,
           date: today,
+          questionsUsed: 1,
         },
-      },
-      create: {
-        userId,
-        date: today,
-        questionsUsed: 1,
-      },
-      update: {
-        questionsUsed: {
-          increment: 1,
+        update: {
+          questionsUsed: {
+            increment: 1,
+          },
         },
-      },
-    });
+      });
 
-    if (usage.questionsUsed > limits.dailyQuestions) {
+    if (
+      usage.questionsUsed >
+      limits.dailyQuestions
+    ) {
       await this.prisma.dailyQuestionUsage.update({
         where: {
           id: usage.id,
@@ -238,18 +291,23 @@ export class SubscriptionsService {
 
   async getDailyUsage(userId: string) {
     const limits = await this.getLimits(userId);
-    const used = await this.getQuestionsUsedToday(userId);
+    const used =
+      await this.getQuestionsUsedToday(userId);
 
     const remaining =
       limits.dailyQuestions === Infinity
         ? Infinity
-        : Math.max(limits.dailyQuestions - used, 0);
+        : Math.max(
+            limits.dailyQuestions - used,
+            0,
+          );
 
     return {
       used,
       limit: limits.dailyQuestions,
       remaining,
-      unlimited: limits.dailyQuestions === Infinity,
+      unlimited:
+        limits.dailyQuestions === Infinity,
     };
   }
 
@@ -271,7 +329,9 @@ export class SubscriptionsService {
   // SIMULACROS
   // ============================================================
 
-  async canGenerateSimulacro(userId: string): Promise<void> {
+  async canGenerateSimulacro(
+    userId: string,
+  ): Promise<void> {
     const limits = await this.getLimits(userId);
 
     if (limits.unlimitedSimulacros) {
@@ -280,19 +340,23 @@ export class SubscriptionsService {
 
     const today = this.getToday();
 
-    const simulacrosToday = await this.prisma.testAttempt.count({
-      where: {
-        userId,
-        startedAt: {
-          gte: today,
+    const simulacrosToday =
+      await this.prisma.testAttempt.count({
+        where: {
+          userId,
+          startedAt: {
+            gte: today,
+          },
+          test: {
+            type: 'SIMULACRO',
+          },
         },
-        test: {
-          type: 'SIMULACRO',
-        },
-      },
-    });
+      });
 
-    if (simulacrosToday >= limits.maxSimulacrosPerDay) {
+    if (
+      simulacrosToday >=
+      limits.maxSimulacrosPerDay
+    ) {
       throw new ForbiddenException(
         `Límite de simulacros diarios alcanzado (${limits.maxSimulacrosPerDay}). Pasa a Premium para tener simulacros ilimitados.`,
       );
@@ -303,8 +367,11 @@ export class SubscriptionsService {
   // EXAMEN REAL
   // ============================================================
 
-  async canGenerateRealExam(userId: string): Promise<void> {
-    const premium = await this.isPremium(userId);
+  async canGenerateRealExam(
+    userId: string,
+  ): Promise<void> {
+    const premium =
+      await this.isPremium(userId);
 
     if (!premium) {
       throw new ForbiddenException(
@@ -319,32 +386,46 @@ export class SubscriptionsService {
 
   async activatePremium(
     userId: string,
-    plan: 'PREMIUM_MONTHLY' | 'PREMIUM_YEARLY',
+    plan:
+      | 'PREMIUM_MONTHLY'
+      | 'PREMIUM_YEARLY',
     days: number,
   ) {
     if (!userId) {
-      throw new NotFoundException('Usuario no indicado');
+      throw new NotFoundException(
+        'Usuario no indicado',
+      );
     }
 
-    if (!Number.isInteger(days) || days <= 0) {
+    if (
+      !Number.isInteger(days) ||
+      days <= 0
+    ) {
       throw new ForbiddenException(
         'La duración de Premium no es válida.',
       );
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
-    });
+    const user =
+      await this.prisma.user.findUnique({
+        where: {
+          id: userId,
+        },
+      });
 
     if (!user) {
-      throw new NotFoundException('Usuario no encontrado');
+      throw new NotFoundException(
+        'Usuario no encontrado',
+      );
     }
 
     const now = new Date();
+
     const endDate = new Date(now);
-    endDate.setDate(endDate.getDate() + days);
+
+    endDate.setDate(
+      endDate.getDate() + days,
+    );
 
     return this.prisma.subscription.upsert({
       where: {
@@ -366,23 +447,35 @@ export class SubscriptionsService {
     });
   }
 
-  async activatePremiumFromStripe(userId: string, days = 30) {
-    return this.activatePremium(userId, 'PREMIUM_MONTHLY', days);
+  async activatePremiumFromStripe(
+    userId: string,
+    days = 30,
+  ) {
+    return this.activatePremium(
+      userId,
+      'PREMIUM_MONTHLY',
+      days,
+    );
   }
 
   // ============================================================
   // CANCELAR SUSCRIPCIÓN
   // ============================================================
 
-  async cancelSubscription(userId: string) {
-    const sub = await this.prisma.subscription.findUnique({
-      where: {
-        userId,
-      },
-    });
+  async cancelSubscription(
+    userId: string,
+  ) {
+    const sub =
+      await this.prisma.subscription.findUnique({
+        where: {
+          userId,
+        },
+      });
 
     if (!sub) {
-      throw new NotFoundException('Suscripción no encontrada');
+      throw new NotFoundException(
+        'Suscripción no encontrada',
+      );
     }
 
     return this.prisma.subscription.update({
@@ -399,50 +492,90 @@ export class SubscriptionsService {
   // STRIPE CHECKOUT
   // ============================================================
 
-  async createCheckoutSession(userId: string) {
-    const secret = this.config.get<string>('STRIPE_SECRET_KEY');
-    const priceId = this.config.get<string>('STRIPE_PRICE_ID');
-    const successUrl = this.config.get<string>('STRIPE_SUCCESS_URL');
-    const cancelUrl = this.config.get<string>('STRIPE_CANCEL_URL');
+  async createCheckoutSession(
+    userId: string,
+  ) {
+    const secret =
+      this.config.get<string>(
+        'STRIPE_SECRET_KEY',
+      );
 
-    if (!secret || !priceId || !successUrl || !cancelUrl) {
+    const priceId =
+      this.config.get<string>(
+        'STRIPE_PRICE_ID',
+      );
+
+    const successUrl =
+      this.config.get<string>(
+        'STRIPE_SUCCESS_URL',
+      );
+
+    const cancelUrl =
+      this.config.get<string>(
+        'STRIPE_CANCEL_URL',
+      );
+
+    if (
+      !secret ||
+      !priceId ||
+      !successUrl ||
+      !cancelUrl
+    ) {
       throw new ForbiddenException(
         'Stripe no está configurado en el servidor (faltan variables de entorno).',
       );
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, email: true },
-    });
+    const user =
+      await this.prisma.user.findUnique({
+        where: {
+          id: userId,
+        },
+        select: {
+          id: true,
+          email: true,
+        },
+      });
 
     if (!user) {
-      throw new NotFoundException('Usuario no encontrado');
+      throw new NotFoundException(
+        'Usuario no encontrado',
+      );
     }
 
-    const alreadyPremium = await this.isPremium(userId);
+    const alreadyPremium =
+      await this.isPremium(userId);
+
     if (alreadyPremium) {
-      throw new ForbiddenException('Ya tienes Premium activo.');
+      throw new ForbiddenException(
+        'Ya tienes Premium activo.',
+      );
     }
 
     const stripe = new Stripe(secret);
 
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      payment_method_types: ['card'],
-      customer_email: user.email,
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: cancelUrl,
-      metadata: {
-        userId: user.id,
-      },
-      subscription_data: {
+    const session =
+      await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        customer_email: user.email,
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: cancelUrl,
         metadata: {
           userId: user.id,
         },
-      },
-    });
+        subscription_data: {
+          metadata: {
+            userId: user.id,
+          },
+        },
+      });
 
     if (!session.url) {
       throw new ForbiddenException(
@@ -450,6 +583,9 @@ export class SubscriptionsService {
       );
     }
 
-    return { url: session.url, sessionId: session.id };
+    return {
+      url: session.url,
+      sessionId: session.id,
+    };
   }
 }
