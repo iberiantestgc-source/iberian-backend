@@ -8,6 +8,7 @@ import {
   Post,
 } from '@nestjs/common';
 import {
+  ApiBody,
   ApiOperation,
   ApiResponse,
   ApiTags,
@@ -38,6 +39,23 @@ export class AuthController {
     summary: 'Bootstrap temporal de SUPER_ADMIN',
     description:
       'Convierte un usuario existente en SUPER_ADMIN utilizando credenciales de bootstrap configuradas en las variables de entorno.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          format: 'email',
+          example: 'juanprueba@gmail.com',
+        },
+        secret: {
+          type: 'string',
+          example: 'TU_SECRET',
+        },
+      },
+      required: ['email', 'secret'],
+    },
   })
   @ApiResponse({
     status: HttpStatus.OK,
