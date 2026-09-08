@@ -24,6 +24,42 @@ export class AuthController {
   ) {}
 
   /**
+   * Bootstrap temporal de SUPER_ADMIN.
+   *
+   * IMPORTANTE:
+   * Esta ruta debe eliminarse después de crear
+   * el primer SUPER_ADMIN.
+   *
+   * POST /api/v1/auth/bootstrap-super-admin
+   */
+  @Post('bootstrap-super-admin')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Bootstrap temporal de SUPER_ADMIN',
+    description:
+      'Convierte un usuario existente en SUPER_ADMIN utilizando credenciales de bootstrap configuradas en las variables de entorno.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description:
+      'Usuario convertido correctamente en SUPER_ADMIN',
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description:
+      'Credenciales de bootstrap inválidas o bootstrap no disponible',
+  })
+  async bootstrapSuperAdmin(
+    @Body('email') email: string,
+    @Body('secret') secret: string,
+  ) {
+    return this.authService.bootstrapSuperAdmin(
+      typeof email === 'string' ? email.trim() : '',
+      typeof secret === 'string' ? secret : '',
+    );
+  }
+
+  /**
    * Registrar un nuevo usuario.
    *
    * POST /api/v1/auth/register

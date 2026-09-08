@@ -192,9 +192,15 @@ export class TestsService {
         ? 8640
         : timeLimitSec ?? Math.round(count * 86.4);
 
-    // ============================================================
-    // 1. COMPROBAR SUSCRIPCIÓN
-    // ============================================================
+// ============================================================
+// 1. COMPROBAR SUSCRIPCIÓN
+// ============================================================
+
+if (type === TestTypeDto.REAL) {
+  await this.subscriptionsService.canGenerateRealExam(
+    userId,
+  );
+}
 
     if (type === TestTypeDto.SIMULACRO) {
       await this.subscriptionsService.canGenerateSimulacro(

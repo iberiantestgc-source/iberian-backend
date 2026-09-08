@@ -214,14 +214,14 @@ model Question {
   difficulty     Difficulty     @default(MEDIUM)
   status         QuestionStatus @default(DRAFT)
   level          Int            @default(1)
-  isRealExam     Boolean        @default(false)
   timesAnswered  Int            @default(0)
   timesCorrect   Int            @default(0)
   averageTimeMs  Int?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   publishedAt    DateTime?
-  answers        Answer[] 
+  isRealExam     Boolean        @default(false)
+  answers        Answer[]
   favorites      Favorite[]
   article        Article?       @relation(fields: [articleId], references: [id])
   law            Law?           @relation(fields: [lawId], references: [id])

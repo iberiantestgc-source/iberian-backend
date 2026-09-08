@@ -3,11 +3,21 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../database/prisma.service';
+import Stripe from 'stripe';
 
-/** Límites del plan FREE */
+/**
+ * ============================================================
+ * PLAN FREE
+ * ============================================================
+ *
+ * IMPORTANTE:
+ * Este límite se aplica en BACKEND.
+ * La aplicación móvil no puede saltárselo.
+ */
 export const FREE_LIMITS = {
-  dailyQuestions: 100,
+  dailyQuestions: 10,
   canUseAI: false,
   unlimitedSimulacros: false,
   maxSimulacrosPerDay: 1,
@@ -17,15 +27,33 @@ export const FREE_LIMITS = {
 
 @Injectable()
 export class SubscriptionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  // ============================================================
+  // FECHA ACTUAL SIN HORA
+  // ============================================================
+
+  private getToday(): Date {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return today;
+  }
+
+  // ============================================================
+  // SUSCRIPCIÓN
+  // ============================================================
 
   async getSubscription(userId: string) {
     const sub = await this.prisma.subscription.findUnique({
-      where: { userId },
+      where: {
+        userId,
+      },
     });
 
     if (!sub) {
-      // Crear FREE por defecto si no existe
       return this.prisma.subscription.create({
         data: {
           userId,
@@ -35,35 +63,42 @@ export class SubscriptionsService {
       });
     }
 
-    // Comprobar expiración
     if (
       sub.status === 'ACTIVE' &&
       sub.endDate &&
       sub.endDate < new Date()
     ) {
       return this.prisma.subscription.update({
-        where: { userId },
-        data: { status: 'EXPIRED', plan: 'FREE' },
+        where: {
+          userId,
+        },
+        data: {
+          status: 'EXPIRED',
+          plan: 'FREE',
+        },
       });
     }
 
     return sub;
   }
 
-  /**
-   * ¿El usuario tiene plan premium activo?
-   */
+  // ============================================================
+  // ¿ES PREMIUM?
+  // ============================================================
+
   async isPremium(userId: string): Promise<boolean> {
     const sub = await this.getSubscription(userId);
+
     return (
       (sub.status === 'ACTIVE' || sub.status === 'TRIAL') &&
       sub.plan !== 'FREE'
     );
   }
 
-  /**
-   * Obtener límites efectivos del usuario
-   */
+  // ============================================================
+  // OBTENER LÍMITES
+  // ============================================================
+
   async getLimits(userId: string) {
     const premium = await this.isPremium(userId);
 
@@ -85,105 +120,336 @@ export class SubscriptionsService {
     };
   }
 
-  /**
-   * Comprueba si el usuario puede responder más preguntas hoy
-   */
-  async canAnswerQuestions(userId: string, count = 1): Promise<void> {
-    const limits = await this.getLimits(userId);
-    if (limits.dailyQuestions === Infinity) return;
+  // ============================================================
+  // USO DE PREGUNTAS HOY
+  // ============================================================
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  async getQuestionsUsedToday(userId: string): Promise<number> {
+    const today = this.getToday();
 
-    const answeredToday = await this.prisma.userAnswer.count({
+    const usage = await this.prisma.dailyQuestionUsage.findUnique({
       where: {
-        userId,
-        answeredAt: { gte: today },
+        userId_date: {
+          userId,
+          date: today,
+        },
       },
     });
 
-    if (answeredToday + count > limits.dailyQuestions) {
+    return usage?.questionsUsed ?? 0;
+  }
+
+  // ============================================================
+  // PREGUNTAS RESTANTES HOY
+  // ============================================================
+
+  async getQuestionsRemainingToday(userId: string): Promise<number> {
+    const limits = await this.getLimits(userId);
+
+    if (limits.dailyQuestions === Infinity) {
+      return Infinity;
+    }
+
+    const used = await this.getQuestionsUsedToday(userId);
+
+    return Math.max(limits.dailyQuestions - used, 0);
+  }
+
+  // ============================================================
+  // COMPROBAR SI PUEDE CONSUMIR PREGUNTAS
+  // ============================================================
+
+  async canAnswerQuestions(userId: string, count = 1): Promise<void> {
+    if (!Number.isInteger(count) || count < 1) {
       throw new ForbiddenException(
-        `Límite diario de preguntas alcanzado (${limits.dailyQuestions}). Pasa a Premium para sin límites.`,
+        'La cantidad de preguntas no es válida.',
+      );
+    }
+
+    const limits = await this.getLimits(userId);
+
+    if (limits.dailyQuestions === Infinity) {
+      return;
+    }
+
+    const used = await this.getQuestionsUsedToday(userId);
+    const remaining = Math.max(limits.dailyQuestions - used, 0);
+
+    if (count > remaining) {
+      throw new ForbiddenException(
+        `Has alcanzado el límite diario de ${limits.dailyQuestions} preguntas del plan FREE. Te quedan ${remaining} preguntas hoy. Pasa a Premium para continuar sin límites.`,
       );
     }
   }
 
-  /**
-   * Comprueba si puede usar el tutor IA
-   */
+  // ============================================================
+  // CONSUMIR UNA PREGUNTA
+  // ============================================================
+
+  async consumeQuestion(userId: string): Promise<void> {
+    const limits = await this.getLimits(userId);
+
+    if (limits.dailyQuestions === Infinity) {
+      return;
+    }
+
+    const today = this.getToday();
+
+    const usage = await this.prisma.dailyQuestionUsage.upsert({
+      where: {
+        userId_date: {
+          userId,
+          date: today,
+        },
+      },
+      create: {
+        userId,
+        date: today,
+        questionsUsed: 1,
+      },
+      update: {
+        questionsUsed: {
+          increment: 1,
+        },
+      },
+    });
+
+    if (usage.questionsUsed > limits.dailyQuestions) {
+      await this.prisma.dailyQuestionUsage.update({
+        where: {
+          id: usage.id,
+        },
+        data: {
+          questionsUsed: {
+            decrement: 1,
+          },
+        },
+      });
+
+      throw new ForbiddenException(
+        `Has alcanzado el límite diario de ${limits.dailyQuestions} preguntas del plan FREE.`,
+      );
+    }
+  }
+
+  // ============================================================
+  // INFORMACIÓN COMPLETA DE USO
+  // ============================================================
+
+  async getDailyUsage(userId: string) {
+    const limits = await this.getLimits(userId);
+    const used = await this.getQuestionsUsedToday(userId);
+
+    const remaining =
+      limits.dailyQuestions === Infinity
+        ? Infinity
+        : Math.max(limits.dailyQuestions - used, 0);
+
+    return {
+      used,
+      limit: limits.dailyQuestions,
+      remaining,
+      unlimited: limits.dailyQuestions === Infinity,
+    };
+  }
+
+  // ============================================================
+  // TUTOR IA
+  // ============================================================
+
   async canUseAI(userId: string): Promise<void> {
     const limits = await this.getLimits(userId);
+
     if (!limits.canUseAI) {
       throw new ForbiddenException(
-        'El tutor IA está disponible solo en Premium.',
+        'El tutor IA está disponible solo para usuarios Premium.',
       );
     }
   }
 
-  /**
-   * Comprueba si puede generar un simulacro
-   */
+  // ============================================================
+  // SIMULACROS
+  // ============================================================
+
   async canGenerateSimulacro(userId: string): Promise<void> {
     const limits = await this.getLimits(userId);
-    if (limits.unlimitedSimulacros) return;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    if (limits.unlimitedSimulacros) {
+      return;
+    }
+
+    const today = this.getToday();
 
     const simulacrosToday = await this.prisma.testAttempt.count({
       where: {
         userId,
-        startedAt: { gte: today },
-        test: { type: 'SIMULACRO' },
+        startedAt: {
+          gte: today,
+        },
+        test: {
+          type: 'SIMULACRO',
+        },
       },
     });
 
     if (simulacrosToday >= limits.maxSimulacrosPerDay) {
       throw new ForbiddenException(
-        `Límite de simulacros diarios alcanzado (${limits.maxSimulacrosPerDay}). Pasa a Premium para ilimitados.`,
+        `Límite de simulacros diarios alcanzado (${limits.maxSimulacrosPerDay}). Pasa a Premium para tener simulacros ilimitados.`,
       );
     }
   }
 
-  /**
-   * Activar premium (manual / admin / webhook Stripe futuro)
-   */
+  // ============================================================
+  // EXAMEN REAL
+  // ============================================================
+
+  async canGenerateRealExam(userId: string): Promise<void> {
+    const premium = await this.isPremium(userId);
+
+    if (!premium) {
+      throw new ForbiddenException(
+        'El examen real de 100 preguntas está disponible únicamente para usuarios Premium.',
+      );
+    }
+  }
+
+  // ============================================================
+  // ACTIVAR PREMIUM
+  // ============================================================
+
   async activatePremium(
     userId: string,
     plan: 'PREMIUM_MONTHLY' | 'PREMIUM_YEARLY',
     days: number,
   ) {
-    const endDate = new Date();
+    if (!userId) {
+      throw new NotFoundException('Usuario no indicado');
+    }
+
+    if (!Number.isInteger(days) || days <= 0) {
+      throw new ForbiddenException(
+        'La duración de Premium no es válida.',
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const now = new Date();
+    const endDate = new Date(now);
     endDate.setDate(endDate.getDate() + days);
 
     return this.prisma.subscription.upsert({
-      where: { userId },
+      where: {
+        userId,
+      },
       update: {
         status: 'ACTIVE',
         plan,
-        startDate: new Date(),
+        startDate: now,
         endDate,
       },
       create: {
         userId,
         status: 'ACTIVE',
         plan,
-        startDate: new Date(),
+        startDate: now,
         endDate,
       },
     });
   }
 
+  async activatePremiumFromStripe(userId: string, days = 30) {
+    return this.activatePremium(userId, 'PREMIUM_MONTHLY', days);
+  }
+
+  // ============================================================
+  // CANCELAR SUSCRIPCIÓN
+  // ============================================================
+
   async cancelSubscription(userId: string) {
     const sub = await this.prisma.subscription.findUnique({
-      where: { userId },
+      where: {
+        userId,
+      },
     });
-    if (!sub) throw new NotFoundException('Suscripción no encontrada');
+
+    if (!sub) {
+      throw new NotFoundException('Suscripción no encontrada');
+    }
 
     return this.prisma.subscription.update({
-      where: { userId },
-      data: { status: 'CANCELLED' },
+      where: {
+        userId,
+      },
+      data: {
+        status: 'CANCELLED',
+      },
     });
+  }
+
+  // ============================================================
+  // STRIPE CHECKOUT
+  // ============================================================
+
+  async createCheckoutSession(userId: string) {
+    const secret = this.config.get<string>('STRIPE_SECRET_KEY');
+    const priceId = this.config.get<string>('STRIPE_PRICE_ID');
+    const successUrl = this.config.get<string>('STRIPE_SUCCESS_URL');
+    const cancelUrl = this.config.get<string>('STRIPE_CANCEL_URL');
+
+    if (!secret || !priceId || !successUrl || !cancelUrl) {
+      throw new ForbiddenException(
+        'Stripe no está configurado en el servidor (faltan variables de entorno).',
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const alreadyPremium = await this.isPremium(userId);
+    if (alreadyPremium) {
+      throw new ForbiddenException('Ya tienes Premium activo.');
+    }
+
+    const stripe = new Stripe(secret);
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      payment_method_types: ['card'],
+      customer_email: user.email,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: cancelUrl,
+      metadata: {
+        userId: user.id,
+      },
+      subscription_data: {
+        metadata: {
+          userId: user.id,
+        },
+      },
+    });
+
+    if (!session.url) {
+      throw new ForbiddenException(
+        'Stripe no devolvió URL de checkout.',
+      );
+    }
+
+    return { url: session.url, sessionId: session.id };
   }
 }

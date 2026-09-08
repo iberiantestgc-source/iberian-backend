@@ -134,6 +134,95 @@ export class AuthService {
   }
 
   /**
+   * Bootstrap temporal de SUPER_ADMIN.
+   *
+   * Este método solo funciona si las siguientes variables
+   * están configuradas en el entorno:
+   *
+   * ADMIN_BOOTSTRAP_EMAIL
+   * ADMIN_BOOTSTRAP_SECRET
+   *
+   * Ambas deben coincidir con los datos recibidos.
+   */
+  async bootstrapSuperAdmin(
+    email: string,
+    secret: string,
+  ) {
+    const configuredEmail =
+      this.configService
+        .get<string>('ADMIN_BOOTSTRAP_EMAIL')
+        ?.trim()
+        .toLowerCase();
+
+    const configuredSecret =
+      this.configService.get<string>(
+        'ADMIN_BOOTSTRAP_SECRET',
+      );
+
+    if (
+      !configuredEmail ||
+      !configuredSecret
+    ) {
+      throw new UnauthorizedException(
+        'Bootstrap de administrador no disponible',
+      );
+    }
+
+    const normalizedEmail =
+      email.trim().toLowerCase();
+
+    if (
+      normalizedEmail !== configuredEmail ||
+      secret !== configuredSecret
+    ) {
+      throw new UnauthorizedException(
+        'Credenciales de bootstrap inválidas',
+      );
+    }
+
+    const user =
+      await this.prisma.user.findUnique({
+        where: {
+          email: normalizedEmail,
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+        },
+      });
+
+    if (!user) {
+      throw new UnauthorizedException(
+        'Usuario no encontrado',
+      );
+    }
+
+    const updatedUser =
+      await this.prisma.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          role: 'SUPER_ADMIN',
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+        },
+      });
+
+    return {
+      message:
+        'Usuario convertido correctamente en SUPER_ADMIN',
+      user: updatedUser,
+    };
+  }
+
+  /**
    * Solicitar recuperación de contraseña.
    */
   async forgotPassword(

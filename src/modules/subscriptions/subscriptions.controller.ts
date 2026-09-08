@@ -24,6 +24,12 @@ export class SubscriptionsController {
     return { subscription: sub, limits };
   }
 
+  @Post('checkout')
+  @ApiOperation({ summary: 'Crear sesión de pago Stripe (Premium)' })
+  checkout(@CurrentUser('id') userId: string) {
+    return this.subscriptionsService.createCheckoutSession(userId);
+  }
+
   @Post('activate')
   @UseGuards(RolesGuard)
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
