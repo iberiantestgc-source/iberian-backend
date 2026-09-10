@@ -17,7 +17,6 @@ export class AiService {
   /**
    * Modelo: configurable por env GEMINI_MODEL.
    * Por defecto uno estable de la API actual.
-   * (gemini-3.6-flash no es un id fiable y provoca errores.)
    */
   private readonly model: string;
 
@@ -67,6 +66,7 @@ export class AiService {
       const answer = await this.generateWithRetry(
         userQuestion,
         systemPrompt,
+        2,
       );
 
       return {
@@ -104,9 +104,12 @@ export class AiService {
         throw error;
       }
 
-      throw new InternalServerErrorException(
-        'No se pudo obtener una respuesta de la inteligencia artificial. Inténtalo de nuevo en unos segundos.',
-      );
+      const detail =
+        typeof error?.message === 'string'
+          ? error.message
+          : 'No se pudo obtener una respuesta de la inteligencia artificial. Inténtalo de nuevo en unos segundos.';
+
+      throw new InternalServerErrorException(detail);
     }
   }
 
@@ -118,20 +121,31 @@ export class AiService {
     systemPrompt: string,
     attempts = 2,
   ): Promise<string> {
-    let lastError: any;
+    let lastError: unknown;
 
     for (let i = 1; i <= attempts; i++) {
       try {
         const response = await this.gemini!.models.generateContent({
           model: this.model,
-          contents: userQuestion,
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: userQuestion }],
+            },
+          ],
           config: {
             systemInstruction: systemPrompt,
             maxOutputTokens: 2500,
           },
         });
 
-        const answer = response.text?.trim();
+        const answer =
+          response.text?.trim() ||
+          (response as any)?.candidates?.[0]?.content?.parts
+            ?.map((p: any) => p?.text)
+            ?.filter(Boolean)
+            ?.join('')
+            ?.trim();
 
         if (!answer) {
           throw new BadRequestException(
@@ -140,12 +154,20 @@ export class AiService {
         }
 
         return answer;
-      } catch (error: any) {
+      } catch (error: unknown) {
         lastError = error;
+
+        const message =
+          error instanceof Error ? error.message : String(error);
+
         console.error(
           `[IBERIAN][GEMINI] Intento ${i}/${attempts} fallido:`,
-          error?.message || error,
+          message,
         );
+
+        if (error instanceof BadRequestException) {
+          throw error;
+        }
 
         if (i < attempts) {
           await new Promise((r) => setTimeout(r, 800));
@@ -153,7 +175,13 @@ export class AiService {
       }
     }
 
-    throw lastError;
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    throw new InternalServerErrorException(
+      'No se pudo obtener una respuesta de la inteligencia artificial.',
+    );
   }
 
   // ============================================================
@@ -442,7 +470,6 @@ Cuando la pregunta sea académica:
 ========================================
 `;
 
-    // ----- CONOCIMIENTO QUE AÑADES TÚ -----
     prompt += `
 
 ${IBERIAN_KNOWLEDGE}
