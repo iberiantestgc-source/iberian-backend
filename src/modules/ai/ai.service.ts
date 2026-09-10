@@ -16,7 +16,8 @@ export class AiService {
 
   /**
    * Modelo: configurable por env GEMINI_MODEL.
-   * Por defecto uno estable de la API actual.
+   * Por defecto gemini-3.6-flash (API actual).
+   * gemini-1.5-flash y gemini-2.0-flash pueden devolver 404.
    */
   private readonly model: string;
 
@@ -29,7 +30,7 @@ export class AiService {
 
     this.model =
       this.configService.get<string>('GEMINI_MODEL') ||
-      'gemini-2.0-flash';
+      'gemini-3.6-flash';
 
     if (apiKey) {
       this.gemini = new GoogleGenAI({ apiKey });
