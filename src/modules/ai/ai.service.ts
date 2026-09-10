@@ -3,184 +3,164 @@ import {
   BadRequestException,
   InternalServerErrorException,
 } from '@nestjs/common';
-
 import { ConfigService } from '@nestjs/config';
-
 import { PrismaService } from '../../database/prisma.service';
-
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-
 import { TutorQuestionDto } from './dto/tutor-question.dto';
-
 import { GoogleGenAI } from '@google/genai';
+import { IBERIAN_KNOWLEDGE } from '../../prompts/iberian-knowledge';
 
 @Injectable()
 export class AiService {
-  private readonly gemini: GoogleGenAI;
+  private readonly gemini: GoogleGenAI | null = null;
 
   /**
-   * Modelo de Gemini utilizado por IBERIAN AI.
+   * Modelo: configurable por env GEMINI_MODEL.
+   * Por defecto uno estable de la API actual.
+   * (gemini-3.6-flash no es un id fiable y provoca errores.)
    */
-  private readonly model = 'gemini-3.6-flash';
+  private readonly model: string;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly subscriptionsService: SubscriptionsService,
   ) {
-    const apiKey =
-      this.configService.get<string>('GEMINI_API_KEY');
+    const apiKey = this.configService.get<string>('GEMINI_API_KEY');
 
-    if (!apiKey) {
-      throw new Error(
-        'GEMINI_API_KEY no está configurada en el archivo .env',
+    this.model =
+      this.configService.get<string>('GEMINI_MODEL') ||
+      'gemini-2.0-flash';
+
+    if (apiKey) {
+      this.gemini = new GoogleGenAI({ apiKey });
+    } else {
+      console.warn(
+        '[IBERIAN][GEMINI] GEMINI_API_KEY no está configurada.',
       );
     }
-
-    this.gemini = new GoogleGenAI({
-      apiKey,
-    });
   }
 
   // ============================================================
   // TUTOR IA
   // ============================================================
 
-  async askTutor(
-    userId: string,
-    dto: TutorQuestionDto,
-  ) {
-    // ==========================================================
-    // 1. COMPROBAR ACCESO A LA IA
-    // ==========================================================
-
+  async askTutor(userId: string, dto: TutorQuestionDto) {
     await this.subscriptionsService.canUseAI(userId);
-
-    // ==========================================================
-    // 2. VALIDAR PREGUNTA
-    // ==========================================================
 
     const userQuestion = dto.question?.trim();
 
     if (!userQuestion) {
-      throw new BadRequestException(
-        'Debes escribir una pregunta.',
+      throw new BadRequestException('Debes escribir una pregunta.');
+    }
+
+    if (!this.gemini) {
+      throw new InternalServerErrorException(
+        'La IA no está configurada en el servidor (falta GEMINI_API_KEY).',
       );
     }
 
-    // ==========================================================
-    // 3. CONSTRUIR CONTEXTO
-    // ==========================================================
-
-    const context = await this.buildContext(
-      userId,
-      dto,
-    );
-
-    // ==========================================================
-    // 4. CONSTRUIR PROMPT DEL SISTEMA
-    // ==========================================================
-
-    const systemPrompt =
-      this.buildSystemPrompt(context);
-
-    // ==========================================================
-    // 5. LLAMAR A GEMINI
-    // ==========================================================
+    const context = await this.buildContext(userId, dto);
+    const systemPrompt = this.buildSystemPrompt(context);
 
     try {
-      const response =
-        await this.gemini.models.generateContent({
-          model: this.model,
-
-          contents: userQuestion,
-
-          config: {
-            systemInstruction: systemPrompt,
-            maxOutputTokens: 2500,
-          },
-        });
-
-      const answer =
-        response.text?.trim();
-
-      if (!answer) {
-        console.error(
-          '[IBERIAN][GEMINI] Gemini no devolvió texto.',
-        );
-
-        throw new BadRequestException(
-          'Gemini no devolvió una respuesta válida.',
-        );
-      }
+      const answer = await this.generateWithRetry(
+        userQuestion,
+        systemPrompt,
+      );
 
       return {
         answer,
-
         contextUsed: {
           hasUser: !!context.user,
           hasQuestion: !!context.question,
           hasArticle: !!context.article,
           hasLaw: !!context.law,
-          recentMistakes:
-            context.recentMistakes?.length ?? 0,
+          recentMistakes: context.recentMistakes?.length ?? 0,
         },
-
         mode: 'gemini',
-
         model: this.model,
       };
     } catch (error: any) {
       console.error(
         '====================================================',
       );
-
-      console.error(
-        '[IBERIAN][GEMINI] ERROR',
-      );
-
-      console.error(
-        error?.message || error,
-      );
+      console.error('[IBERIAN][GEMINI] ERROR');
+      console.error(error?.message || error);
 
       if (error?.status) {
-        console.error(
-          '[IBERIAN][GEMINI] STATUS:',
-          error.status,
-        );
+        console.error('[IBERIAN][GEMINI] STATUS:', error.status);
       }
 
       if (error?.response) {
-        console.error(
-          '[IBERIAN][GEMINI] RESPONSE:',
-          error.response,
-        );
+        console.error('[IBERIAN][GEMINI] RESPONSE:', error.response);
       }
 
       console.error(
         '====================================================',
       );
 
-      if (
-        error instanceof BadRequestException
-      ) {
+      if (error instanceof BadRequestException) {
         throw error;
       }
 
       throw new InternalServerErrorException(
-        'No se pudo obtener una respuesta de la inteligencia artificial.',
+        'No se pudo obtener una respuesta de la inteligencia artificial. Inténtalo de nuevo en unos segundos.',
       );
     }
+  }
+
+  /**
+   * Reintento: el primer fallo a menudo es cold start / red.
+   */
+  private async generateWithRetry(
+    userQuestion: string,
+    systemPrompt: string,
+    attempts = 2,
+  ): Promise<string> {
+    let lastError: any;
+
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        const response = await this.gemini!.models.generateContent({
+          model: this.model,
+          contents: userQuestion,
+          config: {
+            systemInstruction: systemPrompt,
+            maxOutputTokens: 2500,
+          },
+        });
+
+        const answer = response.text?.trim();
+
+        if (!answer) {
+          throw new BadRequestException(
+            'Gemini no devolvió una respuesta válida.',
+          );
+        }
+
+        return answer;
+      } catch (error: any) {
+        lastError = error;
+        console.error(
+          `[IBERIAN][GEMINI] Intento ${i}/${attempts} fallido:`,
+          error?.message || error,
+        );
+
+        if (i < attempts) {
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+    }
+
+    throw lastError;
   }
 
   // ============================================================
   // CONSTRUIR CONTEXTO
   // ============================================================
 
-  private async buildContext(
-    userId: string,
-    dto: TutorQuestionDto,
-  ) {
+  private async buildContext(userId: string, dto: TutorQuestionDto) {
     const context: {
       user?: {
         level: number;
@@ -188,124 +168,73 @@ export class AiService {
         totalQuestions: number;
         accuracy: number;
       };
-
       question?: any;
-
       article?: any;
-
       law?: any;
-
       recentMistakes?: any[];
     } = {};
 
-    // ==========================================================
-    // PERFIL DEL ALUMNO
-    // ==========================================================
-
-    const user =
-      await this.prisma.user.findUnique({
-        where: {
-          id: userId,
-        },
-
-        select: {
-          level: true,
-          xp: true,
-          totalQuestions: true,
-          correctAnswers: true,
-        },
-      });
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        level: true,
+        xp: true,
+        totalQuestions: true,
+        correctAnswers: true,
+      },
+    });
 
     if (user) {
       context.user = {
         level: user.level,
-
         xp: user.xp,
-
-        totalQuestions:
-          user.totalQuestions,
-
+        totalQuestions: user.totalQuestions,
         accuracy:
           user.totalQuestions > 0
             ? Math.round(
-                (user.correctAnswers /
-                  user.totalQuestions) *
-                  100,
+                (user.correctAnswers / user.totalQuestions) * 100,
               )
             : 0,
       };
     }
 
-    // ==========================================================
-    // PREGUNTA DEL BANCO
-    //
-    // Si recibimos questionId:
-    //
-    // question
-    // ├── answers
-    // ├── topic
-    // ├── article
-    // │   ├── paragraphs
-    // │   └── law
-    // └── law
-    //
-    // De esta forma la IA recibe automáticamente
-    // todo el contexto jurídico disponible.
-    // ==========================================================
-
     if (dto.questionId) {
-      const question =
-        await this.prisma.question.findUnique({
-          where: {
-            id: dto.questionId,
-          },
-
-          include: {
-            answers: {
-              orderBy: {
-                order: 'asc',
-              },
-            },
-
-            article: {
-              include: {
-                law: {
-                  select: {
-                    id: true,
-                    name: true,
-                    shortName: true,
-                    code: true,
-                    description: true,
-                  },
-                },
-
-                paragraphs: {
-                  orderBy: {
-                    order: 'asc',
-                  },
+      const question = await this.prisma.question.findUnique({
+        where: { id: dto.questionId },
+        include: {
+          answers: { orderBy: { order: 'asc' } },
+          article: {
+            include: {
+              law: {
+                select: {
+                  id: true,
+                  name: true,
+                  shortName: true,
+                  code: true,
+                  description: true,
                 },
               },
-            },
-
-            law: {
-              select: {
-                id: true,
-                name: true,
-                shortName: true,
-                code: true,
-                description: true,
-              },
-            },
-
-            topic: {
-              select: {
-                id: true,
-                name: true,
-                code: true,
-              },
+              paragraphs: { orderBy: { order: 'asc' } },
             },
           },
-        });
+          law: {
+            select: {
+              id: true,
+              name: true,
+              shortName: true,
+              code: true,
+              description: true,
+            },
+          },
+          topic: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+        },
+      });
 
       if (!question) {
         throw new BadRequestException(
@@ -315,164 +244,83 @@ export class AiService {
 
       context.question = question;
 
-      // ========================================================
-      // ARTÍCULO AUTOMÁTICO
-      // ========================================================
-
       if (question.article) {
-        context.article =
-          question.article;
+        context.article = question.article;
       }
 
-      // ========================================================
-      // LEY AUTOMÁTICA
-      //
-      // Primero utilizamos la ley directamente asociada
-      // a la pregunta.
-      //
-      // Si no existe, utilizamos la ley del artículo.
-      // ========================================================
-
       if (question.law) {
-        context.law =
-          question.law;
-      } else if (
-        question.article?.law
-      ) {
-        context.law =
-          question.article.law;
+        context.law = question.law;
+      } else if (question.article?.law) {
+        context.law = question.article.law;
       }
     }
 
-    // ==========================================================
-    // ARTÍCULO SOLICITADO EXPLÍCITAMENTE
-    //
-    // Solo hacemos esta consulta si todavía no tenemos
-    // un artículo procedente de questionId.
-    // ==========================================================
-
-    if (
-      dto.articleId &&
-      !context.article
-    ) {
-      const article =
-        await this.prisma.article.findUnique({
-          where: {
-            id: dto.articleId,
-          },
-
-          include: {
-            law: {
-              select: {
-                id: true,
-                name: true,
-                shortName: true,
-                code: true,
-                description: true,
-              },
-            },
-
-            paragraphs: {
-              orderBy: {
-                order: 'asc',
-              },
+    if (dto.articleId && !context.article) {
+      const article = await this.prisma.article.findUnique({
+        where: { id: dto.articleId },
+        include: {
+          law: {
+            select: {
+              id: true,
+              name: true,
+              shortName: true,
+              code: true,
+              description: true,
             },
           },
-        });
+          paragraphs: { orderBy: { order: 'asc' } },
+        },
+      });
 
       if (article) {
         context.article = article;
-
-        if (
-          !context.law &&
-          article.law
-        ) {
-          context.law =
-            article.law;
+        if (!context.law && article.law) {
+          context.law = article.law;
         }
       }
     }
 
-    // ==========================================================
-    // LEY SOLICITADA EXPLÍCITAMENTE
-    //
-    // Solo hacemos esta consulta si todavía no tenemos
-    // una ley procedente de questionId o articleId.
-    // ==========================================================
-
-    if (
-      dto.lawId &&
-      !context.law
-    ) {
-      const law =
-        await this.prisma.law.findUnique({
-          where: {
-            id: dto.lawId,
-          },
-
-          select: {
-            id: true,
-            name: true,
-            shortName: true,
-            code: true,
-            description: true,
-          },
-        });
+    if (dto.lawId && !context.law) {
+      const law = await this.prisma.law.findUnique({
+        where: { id: dto.lawId },
+        select: {
+          id: true,
+          name: true,
+          shortName: true,
+          code: true,
+          description: true,
+        },
+      });
 
       if (law) {
         context.law = law;
       }
     }
 
-    // ==========================================================
-    // ÚLTIMOS FALLOS DEL ALUMNO
-    // ==========================================================
-
-    const recentMistakes =
-      await this.prisma.userAnswer.findMany({
-        where: {
-          userId,
-          isCorrect: false,
-        },
-
-        orderBy: {
-          answeredAt: 'desc',
-        },
-
-        take: 5,
-
-        include: {
-          question: {
-            select: {
-              statement: true,
-
-              legalReference: true,
-
-              topic: {
-                select: {
-                  name: true,
-                },
-              },
-            },
+    const recentMistakes = await this.prisma.userAnswer.findMany({
+      where: {
+        userId,
+        isCorrect: false,
+      },
+      orderBy: { answeredAt: 'desc' },
+      take: 5,
+      include: {
+        question: {
+          select: {
+            statement: true,
+            legalReference: true,
+            topic: { select: { name: true } },
           },
         },
-      });
+      },
+    });
 
     if (recentMistakes.length > 0) {
-      context.recentMistakes =
-        recentMistakes.map(
-          (mistake) => ({
-            statement:
-              mistake.question.statement,
-
-            legalReference:
-              mistake.question
-                .legalReference,
-
-            topic:
-              mistake.question.topic?.name,
-          }),
-        );
+      context.recentMistakes = recentMistakes.map((mistake) => ({
+        statement: mistake.question.statement,
+        legalReference: mistake.question.legalReference,
+        topic: mistake.question.topic?.name,
+      }));
     }
 
     return context;
@@ -482,9 +330,7 @@ export class AiService {
   // PROMPT PRINCIPAL DE IBERIAN
   // ============================================================
 
-  private buildSystemPrompt(
-    context: any,
-  ): string {
+  private buildSystemPrompt(context: any): string {
     let prompt = `
 Eres IBERIAN AI, el tutor inteligente especializado
 en la preparación de oposiciones de la Guardia Civil
@@ -596,9 +442,12 @@ Cuando la pregunta sea académica:
 ========================================
 `;
 
-    // ========================================================
-    // PERFIL DEL ALUMNO
-    // ========================================================
+    // ----- CONOCIMIENTO QUE AÑADES TÚ -----
+    prompt += `
+
+${IBERIAN_KNOWLEDGE}
+
+`;
 
     if (context.user) {
       prompt += `
@@ -624,10 +473,6 @@ la dificultad y la explicación.
 `;
     }
 
-    // ========================================================
-    // LEY
-    // ========================================================
-
     if (context.law) {
       prompt += `
 
@@ -649,10 +494,6 @@ ${context.law.description || 'No disponible'}
 `;
     }
 
-    // ========================================================
-    // ARTÍCULO
-    // ========================================================
-
     if (context.article) {
       prompt += `
 
@@ -670,29 +511,19 @@ Texto:
 ${context.article.content || 'No disponible'}
 `;
 
-      if (
-        context.article.paragraphs?.length
-      ) {
+      if (context.article.paragraphs?.length) {
         prompt += `
 
 PÁRRAFOS DEL ARTÍCULO:
 
 `;
-
-        context.article.paragraphs.forEach(
-          (paragraph: any) => {
-            prompt += `- ${
-              paragraph.content ||
-              'Contenido no disponible'
-            }\n`;
-          },
-        );
+        context.article.paragraphs.forEach((paragraph: any) => {
+          prompt += `- ${
+            paragraph.content || 'Contenido no disponible'
+          }\n`;
+        });
       }
     }
-
-    // ========================================================
-    // PREGUNTA DEL BANCO
-    // ========================================================
 
     if (context.question) {
       prompt += `
@@ -714,10 +545,6 @@ Explicación oficial de IBERIAN:
 ${context.question.explanation || 'No disponible'}
 `;
 
-      // ======================================================
-      // TEMA
-      // ======================================================
-
       if (context.question.topic) {
         prompt += `
 
@@ -729,47 +556,28 @@ ${context.question.topic.code || 'No disponible'}
 `;
       }
 
-      // ======================================================
-      // RESPUESTAS
-      // ======================================================
-
-      if (
-        context.question.answers?.length
-      ) {
+      if (context.question.answers?.length) {
         prompt += `
 
 RESPUESTAS DISPONIBLES:
 
 `;
-
-        for (
-          const answer of
-          context.question.answers
-        ) {
+        for (const answer of context.question.answers) {
           prompt += `- ${answer.text}`;
-
           if (answer.isCorrect) {
             prompt += ' [CORRECTA]';
           } else {
             prompt += ' [INCORRECTA]';
           }
-
           if (answer.explanation) {
             prompt += ` — ${answer.explanation}`;
           }
-
           prompt += '\n';
         }
       }
     }
 
-    // ========================================================
-    // ERRORES RECIENTES
-    // ========================================================
-
-    if (
-      context.recentMistakes?.length
-    ) {
+    if (context.recentMistakes?.length) {
       prompt += `
 
 ========================================
@@ -777,27 +585,16 @@ ERRORES RECIENTES DEL ALUMNO
 ========================================
 
 `;
-
-      context.recentMistakes.forEach(
-        (
-          mistake: any,
-          index: number,
-        ) => {
-          prompt += `${index + 1}. ${mistake.statement}`;
-
-          if (mistake.topic) {
-            prompt += ` — Tema: ${mistake.topic}`;
-          }
-
-          if (
-            mistake.legalReference
-          ) {
-            prompt += ` — ${mistake.legalReference}`;
-          }
-
-          prompt += '\n';
-        },
-      );
+      context.recentMistakes.forEach((mistake: any, index: number) => {
+        prompt += `${index + 1}. ${mistake.statement}`;
+        if (mistake.topic) {
+          prompt += ` — Tema: ${mistake.topic}`;
+        }
+        if (mistake.legalReference) {
+          prompt += ` — ${mistake.legalReference}`;
+        }
+        prompt += '\n';
+      });
 
       prompt += `
 
@@ -805,10 +602,6 @@ Utiliza estos errores para detectar posibles
 puntos débiles del alumno y adaptar la explicación.
 `;
     }
-
-    // ========================================================
-    // INSTRUCCIÓN FINAL
-    // ========================================================
 
     prompt += `
 

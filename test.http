@@ -1,12 +1,16 @@
-POST http://localhost:3000/api/ia/generar-plan
+POST https://iberian-backend.onrender.com/api/v1/ia/generar-plan
 Content-Type: application/json
 
 {
   "uid": "test123",
   "fechaExamen": "2027-06-15",
   "horasDiarias": 4,
-  "diasDescanso": ["Domingos"],
-  "temasDificiles": ["Tema 7"],
+  "diasDescanso": [
+    "Domingos"
+  ],
+  "temasDificiles": [
+    "Tema 7"
+  ],
   "tiempoEstudiando": "2 meses",
   "objetivo": "nota-alta",
   "nivelFatiga": "medio",
@@ -21,8 +25,12 @@ Content-Type: application/json
     "totalTests": 45,
     "tasaAcierto": 65,
     "promedioHoras": 3.5,
-    "temasMasFallados": ["Tema 7"],
-    "temasMasAcertados": ["Tema 1"],
+    "temasMasFallados": [
+      "Tema 7"
+    ],
+    "temasMasAcertados": [
+      "Tema 1"
+    ],
     "tendencia": "mejorando",
     "nivelCompromiso": "alto",
     "ritmoEstudio": "constante",
@@ -35,5 +43,8 @@ Content-Type: application/json
   "estadoAnimo": "motivado",
   "mensajeUsuario": "Hoy me siento con energía",
   "tendenciaEmocional": "mejorando",
-  "estadosRecientes": ["motivado", "neutro"]
+  "estadosRecientes": [
+    "motivado",
+    "neutro"
+  ]
 }
