@@ -12,10 +12,18 @@ import { PrismaService } from '../../database/prisma.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
+import { SupabaseService } from './supabase.service';
+
+type UploadedAvatarFile = {
+  buffer: Buffer;
+  mimetype: string;
+};
+
 @Injectable()
 export class UsersService {
   constructor(
     private prisma: PrismaService,
+    private supabaseService: SupabaseService,
   ) {}
 
   async findById(id: string) {
@@ -50,7 +58,22 @@ export class UsersService {
       );
     }
 
-    return user;
+    let avatarUrl = user.avatarUrl;
+
+    if (
+      avatarUrl &&
+      !avatarUrl.startsWith('http')
+    ) {
+      avatarUrl =
+        await this.supabaseService.getSignedUrl(
+          avatarUrl,
+        );
+    }
+
+    return {
+      ...user,
+      avatarUrl,
+    };
   }
 
   async getProfile(userId: string) {
@@ -95,21 +118,109 @@ export class UsersService {
       data.email = email;
     }
 
-    return this.prisma.user.update({
-      where: {
-        id: userId,
-      },
-      data,
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        avatarUrl: true,
-        role: true,
-        xp: true,
-        level: true,
-      },
-    });
+    const updatedUser =
+      await this.prisma.user.update({
+        where: {
+          id: userId,
+        },
+        data,
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          avatarUrl: true,
+          role: true,
+          xp: true,
+          level: true,
+        },
+      });
+
+    let avatarUrl =
+      updatedUser.avatarUrl;
+
+    if (
+      avatarUrl &&
+      !avatarUrl.startsWith('http')
+    ) {
+      avatarUrl =
+        await this.supabaseService.getSignedUrl(
+          avatarUrl,
+        );
+    }
+
+    return {
+      ...updatedUser,
+      avatarUrl,
+    };
+  }
+
+  async updateAvatar(
+    userId: string,
+    file: UploadedAvatarFile,
+  ) {
+    const user =
+      await this.prisma.user.findUnique({
+        where: {
+          id: userId,
+        },
+        select: {
+          id: true,
+          avatarUrl: true,
+        },
+      });
+
+    if (!user) {
+      throw new NotFoundException(
+        'Usuario no encontrado',
+      );
+    }
+
+    const oldAvatarPath =
+      user.avatarUrl &&
+      !user.avatarUrl.startsWith('http')
+        ? user.avatarUrl
+        : null;
+
+    const avatarPath =
+      await this.supabaseService.uploadAvatar(
+        userId,
+        file,
+      );
+
+    const updatedUser =
+      await this.prisma.user.update({
+        where: {
+          id: userId,
+        },
+        data: {
+          avatarUrl: avatarPath,
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          avatarUrl: true,
+          role: true,
+          xp: true,
+          level: true,
+        },
+      });
+
+    if (oldAvatarPath) {
+      await this.supabaseService.deleteFile(
+        oldAvatarPath,
+      );
+    }
+
+    const signedAvatarUrl =
+      await this.supabaseService.getSignedUrl(
+        avatarPath,
+      );
+
+    return {
+      ...updatedUser,
+      avatarUrl: signedAvatarUrl,
+    };
   }
 
   async changePassword(
@@ -156,9 +267,6 @@ export class UsersService {
       },
     });
 
-    /*
-     * Cerramos las demás sesiones.
-     */
     await this.prisma.refreshToken.updateMany({
       where: {
         userId,

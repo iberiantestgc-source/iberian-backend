@@ -4,18 +4,26 @@ import {
   Patch,
   Body,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  ParseFilePipe,
+  MaxFileSizeValidator,
+  FileTypeValidator,
 } from '@nestjs/common';
 
 import {
   ApiTags,
   ApiBearerAuth,
   ApiOperation,
+  ApiConsumes,
+  ApiBody,
 } from '@nestjs/swagger';
+
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import { UsersService } from './users.service';
 
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -65,6 +73,49 @@ export class UsersController {
     return this.usersService.changePassword(
       userId,
       dto,
+    );
+  }
+
+  @Patch('me/avatar')
+  @ApiOperation({
+    summary: 'Actualizar avatar del usuario',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  async updateAvatar(
+    @CurrentUser('id') userId: string,
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({
+            maxSize: 5 * 1024 * 1024,
+          }),
+          new FileTypeValidator({
+            fileType: /^image\/(jpeg|png|webp)$/,
+          }),
+        ],
+      }),
+    )
+    file: {
+      buffer: Buffer;
+      mimetype: string;
+    },
+  ) {
+    return this.usersService.updateAvatar(
+      userId,
+      file,
     );
   }
 }
