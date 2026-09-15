@@ -15,6 +15,9 @@ import Stripe from 'stripe';
  * IMPORTANTE:
  * Estos límites se aplican en BACKEND.
  * La aplicación móvil no puede saltárselos.
+ *
+ * FREE: 10 preguntas cada ventana de 24 h al llegar al tope.
+ * PREMIUM / ADMIN / SUPER_ADMIN: sin este límite.
  */
 export const FREE_LIMITS = {
   dailyQuestions: 10,
@@ -39,18 +42,50 @@ export class SubscriptionsService {
   ) {}
 
   // ============================================================
-  // FECHA ACTUAL SIN HORA
+  // FECHA DEL DÍA (UTC — estable local y Render)
   // ============================================================
 
   private getToday(): Date {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return today;
+    const now = new Date();
+    return new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        0,
+        0,
+        0,
+        0,
+      ),
+    );
+  }
+
+  private getTomorrow(): Date {
+    return new Date(this.getToday().getTime() + 24 * 60 * 60 * 1000);
   }
 
   /** True si el plan no tiene límite diario real. */
   private isUnlimitedDaily(dailyQuestions: number): boolean {
     return dailyQuestions >= PREMIUM_DAILY_QUESTIONS;
+  }
+
+  /**
+   * Busca el uso del día UTC con rango [today, tomorrow).
+   * Evita fallos de findUnique por DateTime exacto vs Postgres.
+   */
+  private async findTodayUsage(userId: string) {
+    return this.prisma.dailyQuestionUsage.findFirst({
+      where: {
+        userId,
+        date: {
+          gte: this.getToday(),
+          lt: this.getTomorrow(),
+        },
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
   }
 
   // ============================================================
@@ -85,10 +120,6 @@ export class SubscriptionsService {
       },
     });
 
-    /**
-     * Si el usuario todavía no tiene suscripción,
-     * se crea automáticamente como FREE.
-     */
     if (!sub) {
       return this.prisma.subscription.create({
         data: {
@@ -99,10 +130,6 @@ export class SubscriptionsService {
       });
     }
 
-    /**
-     * Si una suscripción ACTIVE ha llegado a su fecha
-     * de finalización, pasa automáticamente a EXPIRED.
-     */
     if (
       sub.status === 'ACTIVE' &&
       sub.endDate &&
@@ -127,13 +154,6 @@ export class SubscriptionsService {
   // ============================================================
 
   async isPremium(userId: string): Promise<boolean> {
-    /**
-     * ADMIN y SUPER_ADMIN tienen acceso Premium
-     * independientemente de su suscripción.
-     *
-     * Esto permite administrar y probar la aplicación
-     * sin necesidad de realizar pagos.
-     */
     if (await this.isAdmin(userId)) {
       return true;
     }
@@ -174,119 +194,16 @@ export class SubscriptionsService {
   }
 
   // ============================================================
-  // OBTENER USO ACTUAL
-  // ============================================================
-
-  private async getCurrentUsage(userId: string) {
-    const today = this.getToday();
-
-    /**
-     * Buscamos primero el registro de hoy.
-     */
-    const todayUsage =
-      await this.prisma.dailyQuestionUsage.findUnique({
-        where: {
-          userId_date: {
-            userId,
-            date: today,
-          },
-        },
-      });
-
-    if (todayUsage) {
-      return todayUsage;
-    }
-
-    /**
-     * Si no hay registro de hoy, buscamos el último registro
-     * del usuario que haya alcanzado el límite.
-     *
-     * Usamos updatedAt como momento en el que se alcanzó
-     * el límite de 10 preguntas.
-     */
-    const latestUsage =
-      await this.prisma.dailyQuestionUsage.findFirst({
-        where: {
-          userId,
-          questionsUsed: {
-            gte: FREE_LIMITS.dailyQuestions,
-          },
-        },
-        orderBy: {
-          updatedAt: 'desc',
-        },
-      });
-
-    if (!latestUsage) {
-      return null;
-    }
-
-    /**
-     * El bloqueo dura exactamente 24 horas desde
-     * el momento en que se alcanzó el límite.
-     */
-    const blockedUntil = new Date(
-      latestUsage.updatedAt.getTime() +
-        24 * 60 * 60 * 1000,
-    );
-
-    if (blockedUntil > new Date()) {
-      return latestUsage;
-    }
-
-    return null;
-  }
-
-  // ============================================================
-  // OBTENER MOMENTO DE FIN DEL BLOQUEO
-  // ============================================================
-
-  private getBlockedUntil(
-    usage: {
-      questionsUsed: number;
-      updatedAt: Date;
-    } | null,
-  ): Date | null {
-    if (
-      !usage ||
-      usage.questionsUsed < FREE_LIMITS.dailyQuestions
-    ) {
-      return null;
-    }
-
-    const blockedUntil = new Date(
-      usage.updatedAt.getTime() +
-        24 * 60 * 60 * 1000,
-    );
-
-    if (blockedUntil <= new Date()) {
-      return null;
-    }
-
-    return blockedUntil;
-  }
-
-  // ============================================================
   // PREGUNTAS USADAS HOY
   // ============================================================
 
   async getQuestionsUsedToday(userId: string): Promise<number> {
-    const today = this.getToday();
-
-    const usage = await this.prisma.dailyQuestionUsage.findUnique({
-      where: {
-        userId_date: {
-          userId,
-          date: today,
-        },
-      },
-    });
-
+    const usage = await this.findTodayUsage(userId);
     return usage?.questionsUsed ?? 0;
   }
 
   // ============================================================
-  // PREGUNTAS RESTANTES HOY
+  // PREGUNTAS RESTANTES
   // ============================================================
 
   async getQuestionsRemainingToday(userId: string): Promise<number> {
@@ -296,18 +213,17 @@ export class SubscriptionsService {
       return PREMIUM_DAILY_QUESTIONS;
     }
 
-    const currentUsage = await this.getCurrentUsage(userId);
-    const blockedUntil = this.getBlockedUntil(currentUsage);
+    const usage = await this.findTodayUsage(userId);
+    const used = usage?.questionsUsed ?? 0;
 
-    /**
-     * Si existe un bloqueo activo de 24 horas,
-     * no se puede utilizar ninguna pregunta.
-     */
-    if (blockedUntil) {
-      return 0;
+    if (used >= limits.dailyQuestions && usage) {
+      const blockedUntil = new Date(
+        usage.updatedAt.getTime() + 24 * 60 * 60 * 1000,
+      );
+      if (blockedUntil > new Date()) {
+        return 0;
+      }
     }
-
-    const used = await this.getQuestionsUsedToday(userId);
 
     return Math.max(limits.dailyQuestions - used, 0);
   }
@@ -320,7 +236,9 @@ export class SubscriptionsService {
     userId: string,
     count = 1,
   ): Promise<void> {
-    if (!Number.isInteger(count) || count < 1) {
+    const n = Math.floor(Number(count));
+
+    if (!Number.isFinite(n) || n < 1) {
       throw new ForbiddenException(
         'La cantidad de preguntas no es válida.',
       );
@@ -332,34 +250,30 @@ export class SubscriptionsService {
       return;
     }
 
-    const currentUsage = await this.getCurrentUsage(userId);
-    const blockedUntil = this.getBlockedUntil(currentUsage);
+    const usage = await this.findTodayUsage(userId);
+    const used = usage?.questionsUsed ?? 0;
 
-    /**
-     * Bloqueo de 24 horas.
-     */
-    if (blockedUntil) {
-      const remainingMs =
-        blockedUntil.getTime() -
-        new Date().getTime();
-
-      const remainingHours = Math.ceil(
-        remainingMs / (1000 * 60 * 60),
+    if (used >= limits.dailyQuestions && usage) {
+      const blockedUntil = new Date(
+        usage.updatedAt.getTime() + 24 * 60 * 60 * 1000,
       );
 
-      throw new ForbiddenException(
-        `Has alcanzado el límite de ${limits.dailyQuestions} preguntas del plan FREE. Esta función está bloqueada durante 24 horas. Inténtalo de nuevo en aproximadamente ${remainingHours} hora${remainingHours === 1 ? '' : 's'} o pasa a Premium para continuar sin límites.`,
-      );
+      if (blockedUntil > new Date()) {
+        const remainingMs = blockedUntil.getTime() - Date.now();
+        const remainingHours = Math.max(
+          1,
+          Math.ceil(remainingMs / (1000 * 60 * 60)),
+        );
+
+        throw new ForbiddenException(
+          `Has alcanzado el límite de ${limits.dailyQuestions} preguntas del plan FREE. Esta función está bloqueada durante 24 horas. Inténtalo de nuevo en aproximadamente ${remainingHours} hora${remainingHours === 1 ? '' : 's'} o pasa a Premium para continuar sin límites.`,
+        );
+      }
     }
 
-    const used = await this.getQuestionsUsedToday(userId);
+    const remaining = Math.max(limits.dailyQuestions - used, 0);
 
-    const remaining = Math.max(
-      limits.dailyQuestions - used,
-      0,
-    );
-
-    if (count > remaining) {
+    if (n > remaining) {
       throw new ForbiddenException(
         `Has alcanzado el límite diario de ${limits.dailyQuestions} preguntas del plan FREE. Te quedan ${remaining} preguntas hoy. Pasa a Premium para continuar sin límites.`,
       );
@@ -374,7 +288,9 @@ export class SubscriptionsService {
     userId: string,
     count: number,
   ): Promise<void> {
-    if (!Number.isInteger(count) || count < 1) {
+    const n = Math.floor(Number(count));
+
+    if (!Number.isFinite(n) || n < 1) {
       throw new ForbiddenException(
         'La cantidad de preguntas no es válida.',
       );
@@ -382,57 +298,60 @@ export class SubscriptionsService {
 
     const limits = await this.getLimits(userId);
 
-    /**
-     * Premium no consume contador diario.
-     */
     if (this.isUnlimitedDaily(limits.dailyQuestions)) {
       return;
     }
 
-    /**
-     * Comprobamos primero que el usuario pueda consumir
-     * todas las preguntas solicitadas.
-     */
-    await this.canAnswerQuestions(userId, count);
+    await this.canAnswerQuestions(userId, n);
 
     const today = this.getToday();
 
     await this.prisma.$transaction(async (tx) => {
-      const usage = await tx.dailyQuestionUsage.upsert({
+      const existing = await tx.dailyQuestionUsage.findFirst({
         where: {
-          userId_date: {
-            userId,
-            date: today,
-          },
-        },
-        create: {
           userId,
-          date: today,
-          questionsUsed: count,
-        },
-        update: {
-          questionsUsed: {
-            increment: count,
+          date: {
+            gte: today,
+            lt: this.getTomorrow(),
           },
+        },
+        orderBy: {
+          updatedAt: 'desc',
         },
       });
 
-      /**
-       * Protección adicional contra superar el límite.
-       */
-      if (usage.questionsUsed > limits.dailyQuestions) {
-        throw new ForbiddenException(
-          `Has alcanzado el límite diario de ${limits.dailyQuestions} preguntas del plan FREE.`,
-        );
-      }
+      if (existing) {
+        const updated = await tx.dailyQuestionUsage.update({
+          where: {
+            id: existing.id,
+          },
+          data: {
+            questionsUsed: {
+              increment: n,
+            },
+          },
+        });
 
-      /**
-       * Al llegar exactamente al límite, updatedAt queda
-       * registrado automáticamente por Prisma.
-       *
-       * Ese updatedAt se utiliza como inicio del bloqueo
-       * de 24 horas.
-       */
+        if (updated.questionsUsed > limits.dailyQuestions) {
+          throw new ForbiddenException(
+            `Has alcanzado el límite diario de ${limits.dailyQuestions} preguntas del plan FREE.`,
+          );
+        }
+      } else {
+        if (n > limits.dailyQuestions) {
+          throw new ForbiddenException(
+            `Has alcanzado el límite diario de ${limits.dailyQuestions} preguntas del plan FREE.`,
+          );
+        }
+
+        await tx.dailyQuestionUsage.create({
+          data: {
+            userId,
+            date: today,
+            questionsUsed: n,
+          },
+        });
+      }
     });
   }
 
@@ -450,33 +369,28 @@ export class SubscriptionsService {
 
   async getDailyUsage(userId: string) {
     const limits = await this.getLimits(userId);
+    const unlimited = this.isUnlimitedDaily(limits.dailyQuestions);
+    const usage = unlimited ? null : await this.findTodayUsage(userId);
+    const used = usage?.questionsUsed ?? 0;
 
-    const used = await this.getQuestionsUsedToday(userId);
+    let blocked = false;
+    let blockedUntil: Date | null = null;
 
-    const unlimited = this.isUnlimitedDaily(
-      limits.dailyQuestions,
-    );
-
-    const currentUsage = unlimited
-      ? null
-      : await this.getCurrentUsage(userId);
-
-    const blockedUntil = unlimited
-      ? null
-      : this.getBlockedUntil(currentUsage);
-
-    const blocked =
-      !unlimited &&
-      !!blockedUntil;
+    if (!unlimited && usage && used >= limits.dailyQuestions) {
+      blockedUntil = new Date(
+        usage.updatedAt.getTime() + 24 * 60 * 60 * 1000,
+      );
+      blocked = blockedUntil > new Date();
+      if (!blocked) {
+        blockedUntil = null;
+      }
+    }
 
     const remaining = unlimited
       ? PREMIUM_DAILY_QUESTIONS
       : blocked
         ? 0
-        : Math.max(
-            limits.dailyQuestions - used,
-            0,
-          );
+        : Math.max(limits.dailyQuestions - used, 0);
 
     return {
       used,
@@ -509,32 +423,25 @@ export class SubscriptionsService {
   async canGenerateSimulacro(userId: string): Promise<void> {
     const limits = await this.getLimits(userId);
 
-    /**
-     * Premium puede generar simulacros ilimitados.
-     */
     if (limits.unlimitedSimulacros) {
       return;
     }
 
     const today = this.getToday();
 
-    const simulacrosToday =
-      await this.prisma.testAttempt.count({
-        where: {
-          userId,
-          startedAt: {
-            gte: today,
-          },
-          test: {
-            type: 'SIMULACRO',
-          },
+    const simulacrosToday = await this.prisma.testAttempt.count({
+      where: {
+        userId,
+        startedAt: {
+          gte: today,
         },
-      });
+        test: {
+          type: 'SIMULACRO',
+        },
+      },
+    });
 
-    if (
-      simulacrosToday >=
-      limits.maxSimulacrosPerDay
-    ) {
+    if (simulacrosToday >= limits.maxSimulacrosPerDay) {
       throw new ForbiddenException(
         `Límite de simulacros diarios alcanzado (${limits.maxSimulacrosPerDay}). Pasa a Premium para tener simulacros ilimitados.`,
       );
@@ -613,11 +520,7 @@ export class SubscriptionsService {
   // ============================================================
 
   async activatePremiumFromStripe(userId: string, days = 30) {
-    return this.activatePremium(
-      userId,
-      'PREMIUM_MONTHLY',
-      days,
-    );
+    return this.activatePremium(userId, 'PREMIUM_MONTHLY', days);
   }
 
   // ============================================================
@@ -632,9 +535,7 @@ export class SubscriptionsService {
     });
 
     if (!sub) {
-      throw new NotFoundException(
-        'Suscripción no encontrada',
-      );
+      throw new NotFoundException('Suscripción no encontrada');
     }
 
     return this.prisma.subscription.update({
@@ -653,24 +554,12 @@ export class SubscriptionsService {
   // ============================================================
 
   async createCheckoutSession(userId: string) {
-    const secret =
-      this.config.get<string>('STRIPE_SECRET_KEY');
+    const secret = this.config.get<string>('STRIPE_SECRET_KEY');
+    const priceId = this.config.get<string>('STRIPE_PRICE_ID');
+    const successUrl = this.config.get<string>('STRIPE_SUCCESS_URL');
+    const cancelUrl = this.config.get<string>('STRIPE_CANCEL_URL');
 
-    const priceId =
-      this.config.get<string>('STRIPE_PRICE_ID');
-
-    const successUrl =
-      this.config.get<string>('STRIPE_SUCCESS_URL');
-
-    const cancelUrl =
-      this.config.get<string>('STRIPE_CANCEL_URL');
-
-    if (
-      !secret ||
-      !priceId ||
-      !successUrl ||
-      !cancelUrl
-    ) {
+    if (!secret || !priceId || !successUrl || !cancelUrl) {
       throw new ForbiddenException(
         'Stripe no está configurado en el servidor (faltan variables de entorno).',
       );
@@ -699,47 +588,40 @@ export class SubscriptionsService {
     });
 
     if (!user) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
-    const alreadyPremium =
-      await this.isPremium(userId);
+    const alreadyPremium = await this.isPremium(userId);
 
     if (alreadyPremium) {
-      throw new ForbiddenException(
-        'Ya tienes Premium activo.',
-      );
+      throw new ForbiddenException('Ya tienes Premium activo.');
     }
 
     const stripe = new Stripe(secret);
 
     try {
-      const session =
-        await stripe.checkout.sessions.create({
-          mode: 'subscription',
-          payment_method_types: ['card'],
-          customer_email:
-            user.email ?? undefined,
-          line_items: [
-            {
-              price: priceId,
-              quantity: 1,
-            },
-          ],
-          success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: cancelUrl,
-          allow_promotion_codes: true,
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        customer_email: user.email ?? undefined,
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: cancelUrl,
+        allow_promotion_codes: true,
+        metadata: {
+          userId: user.id,
+        },
+        subscription_data: {
           metadata: {
             userId: user.id,
           },
-          subscription_data: {
-            metadata: {
-              userId: user.id,
-            },
-          },
-        });
+        },
+      });
 
       if (!session.url) {
         throw new ForbiddenException(
@@ -752,38 +634,30 @@ export class SubscriptionsService {
         sessionId: session.id,
       };
     } catch (error: any) {
-      const message = String(
-        error?.message || error || '',
-      );
+      const message = String(error?.message || error || '');
 
       if (
-        message
-          .toLowerCase()
-          .includes('recurring') ||
-        message
-          .toLowerCase()
-          .includes('subscription')
+        message.toLowerCase().includes('recurring') ||
+        message.toLowerCase().includes('subscription')
       ) {
         try {
-          const session =
-            await stripe.checkout.sessions.create({
-              mode: 'payment',
-              payment_method_types: ['card'],
-              customer_email:
-                user.email ?? undefined,
-              line_items: [
-                {
-                  price: priceId,
-                  quantity: 1,
-                },
-              ],
-              success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
-              cancel_url: cancelUrl,
-              allow_promotion_codes: true,
-              metadata: {
-                userId: user.id,
+          const session = await stripe.checkout.sessions.create({
+            mode: 'payment',
+            payment_method_types: ['card'],
+            customer_email: user.email ?? undefined,
+            line_items: [
+              {
+                price: priceId,
+                quantity: 1,
               },
-            });
+            ],
+            success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: cancelUrl,
+            allow_promotion_codes: true,
+            metadata: {
+              userId: user.id,
+            },
+          });
 
           if (!session.url) {
             throw new ForbiddenException(
@@ -814,17 +688,11 @@ export class SubscriptionsService {
   // WEBHOOK DE STRIPE
   // ============================================================
 
-  async handleStripeWebhook(
-    signature: string,
-    rawBody: Buffer,
-  ) {
-    const secret =
-      this.config.get<string>('STRIPE_SECRET_KEY');
-
-    const webhookSecret =
-      this.config.get<string>(
-        'STRIPE_WEBHOOK_SECRET',
-      );
+  async handleStripeWebhook(signature: string, rawBody: Buffer) {
+    const secret = this.config.get<string>('STRIPE_SECRET_KEY');
+    const webhookSecret = this.config.get<string>(
+      'STRIPE_WEBHOOK_SECRET',
+    );
 
     if (!secret) {
       throw new ForbiddenException(
@@ -866,15 +734,11 @@ export class SubscriptionsService {
       );
     }
 
-    if (
-      event.type ===
-      'checkout.session.completed'
-    ) {
-      const session =
-        event.data.object as Stripe.Checkout.Session;
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data
+        .object as Stripe.Checkout.Session;
 
-      const userId =
-        session.metadata?.userId;
+      const userId = session.metadata?.userId;
 
       if (!userId) {
         throw new ForbiddenException(
@@ -895,9 +759,7 @@ export class SubscriptionsService {
         }
 
         const subscription =
-          await stripe.subscriptions.retrieve(
-            stripeSubscriptionId,
-          );
+          await stripe.subscriptions.retrieve(stripeSubscriptionId);
 
         const customerId =
           typeof session.customer === 'string'
@@ -910,10 +772,7 @@ export class SubscriptionsService {
           customerId ?? null,
         );
       } else {
-        await this.activatePremiumFromStripe(
-          userId,
-          30,
-        );
+        await this.activatePremiumFromStripe(userId, 30);
       }
 
       return {
@@ -922,23 +781,18 @@ export class SubscriptionsService {
       };
     }
 
-    if (
-      event.type ===
-      'customer.subscription.updated'
-    ) {
-      const subscription =
-        event.data.object as Stripe.Subscription;
+    if (event.type === 'customer.subscription.updated') {
+      const subscription = event.data
+        .object as Stripe.Subscription;
 
-      const userId =
-        subscription.metadata?.userId;
+      const userId = subscription.metadata?.userId;
 
       if (!userId) {
         return {
           received: true,
           type: event.type,
           ignored: true,
-          reason:
-            'La suscripción no contiene userId.',
+          reason: 'La suscripción no contiene userId.',
         };
       }
 
@@ -959,23 +813,18 @@ export class SubscriptionsService {
       };
     }
 
-    if (
-      event.type ===
-      'customer.subscription.deleted'
-    ) {
-      const subscription =
-        event.data.object as Stripe.Subscription;
+    if (event.type === 'customer.subscription.deleted') {
+      const subscription = event.data
+        .object as Stripe.Subscription;
 
-      const userId =
-        subscription.metadata?.userId;
+      const userId = subscription.metadata?.userId;
 
       if (!userId) {
         return {
           received: true,
           type: event.type,
           ignored: true,
-          reason:
-            'La suscripción no contiene userId.',
+          reason: 'La suscripción no contiene userId.',
         };
       }
 
@@ -984,8 +833,7 @@ export class SubscriptionsService {
           OR: [
             { userId },
             {
-              stripeSubId:
-                subscription.id,
+              stripeSubId: subscription.id,
             },
           ],
         },
@@ -1002,20 +850,12 @@ export class SubscriptionsService {
       };
     }
 
-    if (
-      event.type ===
-      'invoice.payment_failed'
-    ) {
-      const invoice =
-        event.data.object as Stripe.Invoice & {
-          subscription?:
-            | string
-            | Stripe.Subscription
-            | null;
-        };
+    if (event.type === 'invoice.payment_failed') {
+      const invoice = event.data.object as Stripe.Invoice & {
+        subscription?: string | Stripe.Subscription | null;
+      };
 
-      const stripeSubscription =
-        invoice.subscription;
+      const stripeSubscription = invoice.subscription;
 
       const stripeSubId =
         typeof stripeSubscription === 'string'
@@ -1080,47 +920,34 @@ export class SubscriptionsService {
       case 'active':
         localStatus = 'ACTIVE';
         break;
-
       case 'trialing':
         localStatus = 'TRIAL';
         break;
-
       case 'canceled':
         localStatus = 'CANCELLED';
         break;
-
       case 'unpaid':
       case 'incomplete_expired':
         localStatus = 'EXPIRED';
         break;
-
       case 'past_due':
         localStatus = 'ACTIVE';
         break;
-
       case 'incomplete':
         localStatus = 'FREE';
         break;
-
       case 'paused':
         localStatus = 'ACTIVE';
         break;
-
       default:
         localStatus = 'FREE';
         break;
     }
 
-    const price =
-      subscription.items.data[0]?.price;
+    const price = subscription.items.data[0]?.price;
+    const interval = price?.recurring?.interval;
 
-    const interval =
-      price?.recurring?.interval;
-
-    let plan:
-      | 'FREE'
-      | 'PREMIUM_MONTHLY'
-      | 'PREMIUM_YEARLY';
+    let plan: 'FREE' | 'PREMIUM_MONTHLY' | 'PREMIUM_YEARLY';
 
     if (interval === 'year') {
       plan = 'PREMIUM_YEARLY';
@@ -1138,26 +965,17 @@ export class SubscriptionsService {
       plan = 'FREE';
     }
 
-    const startDate =
-      subscription.start_date
-        ? new Date(
-            subscription.start_date * 1000,
-          )
-        : new Date();
+    const startDate = subscription.start_date
+      ? new Date(subscription.start_date * 1000)
+      : new Date();
 
-    const periodEnd =
-      (subscription as any)
-        .current_period_end as
-        | number
-        | undefined;
+    const periodEnd = (subscription as any).current_period_end as
+      | number
+      | undefined;
 
-    const endDate = periodEnd
-      ? new Date(periodEnd * 1000)
-      : null;
+    const endDate = periodEnd ? new Date(periodEnd * 1000) : null;
 
-    const autoRenew =
-      subscription.cancel_at_period_end !==
-      true;
+    const autoRenew = subscription.cancel_at_period_end !== true;
 
     return this.prisma.subscription.upsert({
       where: {

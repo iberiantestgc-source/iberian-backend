@@ -14,6 +14,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "ts-node prisma/seed.ts",
     "import:questions": "ts-node prisma/import-questions.ts",
+    "questions:import": "ts-node prisma/import-questions.ts",
+    "questions:watch": "ts-node prisma/import-questions.ts --watch",
     "test": "jest"
   },
   "dependencies": {
@@ -30,6 +32,7 @@
     "@supabase/supabase-js": "^2.116.0",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
+    "chokidar": "^4.0.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.0",
     "cors": "^2.8.5",
@@ -39,6 +42,7 @@
     "express": "^4.18.2",
     "passport": "^0.6.0",
     "passport-jwt": "^4.0.1",
+    "percentage": "^0.2.0",
     "reflect-metadata": "^0.2.2",
     "resend": "^6.22.0",
     "rxjs": "^7.8.1",
@@ -58,7 +62,7 @@
     "@types/node": "^18.19.130",
     "@types/passport": "^1.0.12",
     "@types/passport-jwt": "^3.0.9",
-    "@types/supertest": "^2.0.16",
+    "@types/supertest": "^2.0.0",
     "jest": "^29.7.0",
     "nodemon": "^2.0.22",
     "prisma": "5.22.0",

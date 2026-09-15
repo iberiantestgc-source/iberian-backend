@@ -1,12 +1,16 @@
 import {
-Controller,
-Get,
-Param,
-Query,
-UseGuards,
+  Controller,
+  Get,
+  Param,
+  Query,
+  UseGuards,
 } from '@nestjs/common';
 
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import { TopicsService } from './topics.service';
 
@@ -17,17 +21,38 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 @UseGuards(JwtAuthGuard)
 @Controller('topics')
 export class TopicsController {
-constructor(private readonly topicsService: TopicsService) {}
+  constructor(
+    private readonly topicsService: TopicsService,
+  ) {}
 
-@Get()
-@ApiOperation({ summary: 'Obtener todos los temas' })
-async findAll(@Query('oppositionId') oppositionId?: string) {
-return this.topicsService.findAll(oppositionId);
-}
+  @Get()
+  @ApiOperation({
+    summary: 'Obtener todos los temas',
+  })
+  async findAll(
+    @Query('oppositionId') oppositionId?: string,
+  ) {
+    return this.topicsService.findAll(oppositionId);
+  }
 
-@Get(':id')
-@ApiOperation({ summary: 'Obtener un tema por ID' })
-async findOne(@Param('id') id: string) {
-return this.topicsService.findOne(id);
-}
+  @Get('catalog')
+  @ApiOperation({
+    summary:
+      'Obtener catálogo Tema → Subtema → Ley → Artículos',
+  })
+  async findCatalog(
+    @Query('oppositionId') oppositionId?: string,
+  ) {
+    return this.topicsService.findCatalog(oppositionId);
+  }
+
+  @Get(':id')
+  @ApiOperation({
+    summary: 'Obtener un tema por ID',
+  })
+  async findOne(
+    @Param('id') id: string,
+  ) {
+    return this.topicsService.findOne(id);
+  }
 }

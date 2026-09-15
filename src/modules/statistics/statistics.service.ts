@@ -1,7 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 
-type StatisticsPeriod = 'general' | 'semanal' | 'mensual' | 'anual';
+type StatisticsPeriod =
+  | 'general'
+  | 'semanal'
+  | 'mensual'
+  | 'anual';
+
+type TopicStatLevel =
+  | 'TOPIC'
+  | 'SUBTOPIC';
 
 @Injectable()
 export class StatisticsService {
@@ -34,18 +42,21 @@ export class StatisticsService {
         : 0;
 
     const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    sevenDaysAgo.setDate(
+      sevenDaysAgo.getDate() - 7,
+    );
 
-    const recentAnswers = await this.prisma.userAnswer.groupBy({
-      by: ['isCorrect'],
-      where: {
-        userId,
-        answeredAt: {
-          gte: sevenDaysAgo,
+    const recentAnswers =
+      await this.prisma.userAnswer.groupBy({
+        by: ['isCorrect'],
+        where: {
+          userId,
+          answeredAt: {
+            gte: sevenDaysAgo,
+          },
         },
-      },
-      _count: true,
-    });
+        _count: true,
+      });
 
     const recentCorrect =
       recentAnswers.find(
@@ -65,10 +76,11 @@ export class StatisticsService {
         },
       });
 
-    const studyTime = await this.getStudyTime(
-      userId,
-      undefined,
-    );
+    const studyTime =
+      await this.getStudyTime(
+        userId,
+        undefined,
+      );
 
     return {
       xp: user.xp,
@@ -91,12 +103,17 @@ export class StatisticsService {
       last7Days: {
         correct: recentCorrect,
         wrong: recentWrong,
-        total: recentCorrect + recentWrong,
+        total:
+          recentCorrect +
+          recentWrong,
         accuracy:
-          recentCorrect + recentWrong > 0
+          recentCorrect +
+            recentWrong >
+          0
             ? Math.round(
                 (recentCorrect /
-                  (recentCorrect + recentWrong)) *
+                  (recentCorrect +
+                    recentWrong)) *
                   10000,
               ) / 100
             : 0,
@@ -212,23 +229,17 @@ export class StatisticsService {
 
     return {
       period,
-
       correct,
       wrong,
       total,
-
       accuracy,
-
       testsCompleted:
         tests.length,
-
       studyTimeSeconds,
-
       studyHours:
         Math.round(
           (studyTimeSeconds / 3600) * 10,
         ) / 10,
-
       evolution:
         this.buildEvolution(
           answers,
@@ -357,7 +368,6 @@ export class StatisticsService {
       await this.prisma.testAttempt.findMany({
         where: {
           userId,
-
           status: 'COMPLETED',
 
           ...(startDate
@@ -388,7 +398,7 @@ export class StatisticsService {
   }
 
   // ============================================================
-  // ESTADÍSTICAS POR TEMA
+  // ESTADÍSTICAS POR TEMA Y SUBTEMA
   // ============================================================
 
   async getTopicStats(
@@ -418,6 +428,14 @@ export class StatisticsService {
                   id: true,
                   name: true,
                   code: true,
+                  parentId: true,
+                  parent: {
+                    select: {
+                      id: true,
+                      name: true,
+                      code: true,
+                    },
+                  },
                 },
               },
             },
@@ -425,17 +443,42 @@ export class StatisticsService {
         },
       });
 
-    const byTopic = new Map<
-      string,
-      {
-        topicId: string;
-        name: string;
-        code: string | null;
-        correct: number;
-        wrong: number;
-        total: number;
-      }
-    >();
+    type TopicAccumulator = {
+      topicId: string;
+      name: string;
+      code: string | null;
+      parentTopicId: string | null;
+      parentTopicName: string | null;
+      parentTopicCode: string | null;
+      level: TopicStatLevel;
+      correct: number;
+      wrong: number;
+      total: number;
+    };
+
+    // ----------------------------------------------------------
+    // ESTADÍSTICAS DIRECTAS DE CADA SUBTEMA
+    // ----------------------------------------------------------
+
+    const bySubtopic =
+      new Map<
+        string,
+        TopicAccumulator
+      >();
+
+    // ----------------------------------------------------------
+    // ESTADÍSTICAS GLOBALES DE CADA TEMA PRINCIPAL
+    //
+    // Incluye:
+    // - preguntas asignadas directamente al tema
+    // - preguntas asignadas a cualquiera de sus subtemas
+    // ----------------------------------------------------------
+
+    const byTopic =
+      new Map<
+        string,
+        TopicAccumulator
+      >();
 
     for (const answer of answers) {
       const topic =
@@ -443,61 +486,124 @@ export class StatisticsService {
 
       if (!topic) continue;
 
-      const current =
-        byTopic.get(topic.id) ?? {
-          topicId: topic.id,
-          name: topic.name,
-          code: topic.code,
+      // ========================================================
+      // RESPUESTA DEL TEMA PRINCIPAL
+      // ========================================================
+
+      const parentTopic =
+        topic.parent ?? topic;
+
+      const parentAccumulator =
+        byTopic.get(
+          parentTopic.id,
+        ) ?? {
+          topicId:
+            parentTopic.id,
+          name:
+            parentTopic.name,
+          code:
+            parentTopic.code,
+          parentTopicId:
+            null,
+          parentTopicName:
+            null,
+          parentTopicCode:
+            null,
+          level: 'TOPIC',
           correct: 0,
           wrong: 0,
           total: 0,
         };
 
-      current.total += 1;
+      parentAccumulator.total += 1;
 
       if (answer.isCorrect) {
-        current.correct += 1;
+        parentAccumulator.correct += 1;
       } else {
-        current.wrong += 1;
+        parentAccumulator.wrong += 1;
       }
 
       byTopic.set(
-        topic.id,
-        current,
+        parentTopic.id,
+        parentAccumulator,
       );
-    }
 
-    return Array.from(
-      byTopic.values(),
-    )
-      .map((topic) => ({
-        ...topic,
+      // ========================================================
+      // RESPUESTA DIRECTA DEL SUBTEMA
+      // ========================================================
 
-        accuracy:
-          topic.total > 0
-            ? Math.round(
-                (topic.correct /
-                  topic.total) *
-                  10000,
-              ) / 100
-            : 0,
-      }))
-      .sort((a, b) => {
-        if (
-          a.accuracy !==
-          b.accuracy
-        ) {
-          return (
-            a.accuracy -
-            b.accuracy
-          );
+      if (topic.parent) {
+        const subtopicAccumulator =
+          bySubtopic.get(
+            topic.id,
+          ) ?? {
+            topicId: topic.id,
+            name: topic.name,
+            code: topic.code,
+            parentTopicId:
+              topic.parent.id,
+            parentTopicName:
+              topic.parent.name,
+            parentTopicCode:
+              topic.parent.code,
+            level: 'SUBTOPIC',
+            correct: 0,
+            wrong: 0,
+            total: 0,
+          };
+
+        subtopicAccumulator.total += 1;
+
+        if (answer.isCorrect) {
+          subtopicAccumulator.correct += 1;
+        } else {
+          subtopicAccumulator.wrong += 1;
         }
 
-        return (
-          b.total -
-          a.total
+        bySubtopic.set(
+          topic.id,
+          subtopicAccumulator,
         );
-      });
+      }
+    }
+
+    const calculateAccuracy = (
+      topic: TopicAccumulator,
+    ) => ({
+      ...topic,
+
+      accuracy:
+        topic.total > 0
+          ? Math.round(
+              (topic.correct /
+                topic.total) *
+                10000,
+            ) / 100
+          : 0,
+    });
+
+    const topicStats =
+      Array.from(
+        byTopic.values(),
+      ).map(
+        calculateAccuracy,
+      );
+
+    const subtopicStats =
+      Array.from(
+        bySubtopic.values(),
+      ).map(
+        calculateAccuracy,
+      );
+
+    // ==========================================================
+    // DEVOLVEMOS PRIMERO LOS TEMAS Y DESPUÉS LOS SUBTEMAS
+    // ==========================================================
+
+    return [
+      ...topicStats,
+      ...subtopicStats,
+    ];
   }
 
   // ============================================================
@@ -524,34 +630,63 @@ export class StatisticsService {
     }
 
     // ----------------------------------------------------------
+    // PARA LAS RECOMENDACIONES UTILIZAMOS SOLO LOS TEMAS
+    // PRINCIPALES.
+    //
+    // Así no duplicamos las respuestas de los subtemas.
+    // El endpoint de estadísticas sigue devolviendo ambos niveles.
+    // ----------------------------------------------------------
+
+    const mainTopics =
+      topicStats.filter(
+        (topic) =>
+          topic.level === 'TOPIC',
+      );
+
+    // ----------------------------------------------------------
     // CLASIFICAR TEMAS
     // ----------------------------------------------------------
 
     const weakTopics =
-      topicStats
+      mainTopics
         .filter(
           (topic) =>
             topic.total >= 3 &&
             topic.accuracy < 70,
         )
+        .sort(
+          (a, b) =>
+            a.accuracy -
+            b.accuracy,
+        )
         .slice(0, 5);
 
     const mediumTopics =
-      topicStats
+      mainTopics
         .filter(
           (topic) =>
             topic.total >= 3 &&
             topic.accuracy >= 70 &&
             topic.accuracy < 85,
         )
+        .sort(
+          (a, b) =>
+            a.accuracy -
+            b.accuracy,
+        )
         .slice(0, 5);
 
     const strongTopics =
-      topicStats
+      mainTopics
         .filter(
           (topic) =>
             topic.total >= 3 &&
             topic.accuracy >= 85,
+        )
+        .sort(
+          (a, b) =>
+            b.accuracy -
+            a.accuracy,
         )
         .slice(0, 5);
 

@@ -39,7 +39,14 @@ async function bootstrap() {
       'API de la plataforma de preparación de oposiciones IBERIAN v1.0',
     )
     .setVersion('1.0')
-    .addBearerAuth()
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+      },
+      'bearer',
+    )
     .addTag('auth', 'Autenticación y registro')
     .addTag('users', 'Gestión de usuarios')
     .addTag('questions', 'Sistema de preguntas')

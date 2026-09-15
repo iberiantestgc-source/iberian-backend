@@ -35,7 +35,7 @@ export class SubscriptionsController {
   ) {}
 
   @Get('me')
-  @ApiBearerAuth()
+  @ApiBearerAuth('bearer')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Mi suscripción y límites' })
   async getMine(@CurrentUser('id') userId: string) {
@@ -51,9 +51,11 @@ export class SubscriptionsController {
   }
 
   @Post('checkout')
-  @ApiBearerAuth()
+  @ApiBearerAuth('bearer')
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Crear sesión de pago Stripe (Premium 9,99€/mes)' })
+  @ApiOperation({
+    summary: 'Crear sesión de pago Stripe (Premium 9,99€/mes)',
+  })
   checkout(@CurrentUser('id') userId: string) {
     return this.subscriptionsService.createCheckoutSession(userId);
   }
@@ -85,10 +87,12 @@ export class SubscriptionsController {
   }
 
   @Post('activate')
-  @ApiBearerAuth()
+  @ApiBearerAuth('bearer')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Activar Premium manualmente (Admin)' })
+  @ApiOperation({
+    summary: 'Activar Premium manualmente (Admin)',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -129,7 +133,7 @@ export class SubscriptionsController {
   }
 
   @Post('cancel')
-  @ApiBearerAuth()
+  @ApiBearerAuth('bearer')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Cancelar mi suscripción' })
   cancel(@CurrentUser('id') userId: string) {

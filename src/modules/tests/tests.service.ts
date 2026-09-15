@@ -192,15 +192,15 @@ export class TestsService {
         ? 8640
         : timeLimitSec ?? Math.round(count * 86.4);
 
-// ============================================================
-// 1. COMPROBAR SUSCRIPCIÓN
-// ============================================================
+    // ============================================================
+    // 1. COMPROBAR SUSCRIPCIÓN
+    // ============================================================
 
-if (type === TestTypeDto.REAL) {
-  await this.subscriptionsService.canGenerateRealExam(
-    userId,
-  );
-}
+    if (type === TestTypeDto.REAL) {
+      await this.subscriptionsService.canGenerateRealExam(
+        userId,
+      );
+    }
 
     if (type === TestTypeDto.SIMULACRO) {
       await this.subscriptionsService.canGenerateSimulacro(
@@ -514,6 +514,25 @@ if (type === TestTypeDto.REAL) {
       });
 
     // ============================================================
+    // 10.1. CONSUMIR PREGUNTAS DEL LÍMITE DIARIO
+    // ============================================================
+    //
+    // Se consume DESPUÉS de haber creado correctamente el test
+    // y el intento.
+    //
+    // De esta forma, una generación que falle antes de crear
+    // el test no consume preguntas.
+    //
+    // PREMIUM no queda limitado por este método porque
+    // SubscriptionsService gestiona sus propios límites.
+    // ============================================================
+
+    await this.subscriptionsService.consumeQuestions(
+      userId,
+      count,
+    );
+
+    // ============================================================
     // 11. DEVOLVER TEST
     // ============================================================
 
@@ -539,6 +558,21 @@ if (type === TestTypeDto.REAL) {
             const question =
               testQuestion.question;
 
+            // IMPORTANTE:
+            // Las respuestas se mezclan únicamente para su
+            // posición de presentación.
+            //
+            // NO modificamos el ID, el texto ni isCorrect.
+            // El backend seguirá comprobando la respuesta
+            // correcta mediante answer.isCorrect.
+            const shuffledAnswers = [
+              ...question.answers,
+            ];
+
+            this.shuffleArray(
+              shuffledAnswers,
+            );
+
             return {
               order:
                 testQuestion.order,
@@ -553,7 +587,7 @@ if (type === TestTypeDto.REAL) {
                 question.difficulty,
 
               answers:
-                question.answers.map(
+                shuffledAnswers.map(
                   (answer) => ({
                     id:
                       answer.id,
@@ -584,122 +618,87 @@ if (type === TestTypeDto.REAL) {
   // OBTENER PREGUNTAS SEGÚN SELECCIÓN
   // ============================================================
 
-  private async getQuestionsForSelection(
-    params: {
-      oppositionId: string;
-      count: number;
-      topicIds?: string[];
-      lawId?: string;
-      articleIds?: string[];
-      difficulty?: Difficulty;
-      excludeIds?: string[];
-    },
-  ) {
-    const topicIds =
-      await this.expandTopicIds(
-        params.oppositionId,
-        params.topicIds ?? [],
-      );
+   private async getQuestionsForSelection(params: {
+    oppositionId: string;
+    count: number;
+    topicIds?: string[];
+    lawId?: string;
+    articleIds?: string[];
+    difficulty?: Difficulty;
+    excludeIds?: string[];
+  }) {
+    const topicIds = await this.expandTopicIds(
+      params.oppositionId,
+      params.topicIds ?? [],
+    );
+
+    const articleIds = Array.from(
+      new Set((params.articleIds ?? []).filter(Boolean)),
+    );
 
     const where: Prisma.QuestionWhereInput = {
-      oppositionId:
-        params.oppositionId,
-
-      status:
-        'PUBLISHED',
+      oppositionId: params.oppositionId,
+      status: 'PUBLISHED',
 
       ...(params.lawId
         ? {
-            lawId:
-              params.lawId,
+            lawId: params.lawId,
           }
         : {}),
 
       ...(params.difficulty
         ? {
-            difficulty:
-              params.difficulty,
+            difficulty: params.difficulty,
           }
         : {}),
 
-      ...(params.excludeIds &&
-      params.excludeIds.length > 0
+      ...(params.excludeIds && params.excludeIds.length > 0
         ? {
             id: {
-              notIn:
-                params.excludeIds,
+              notIn: params.excludeIds,
             },
-          }
-        : {}),
-
-      ...(topicIds.length > 0 ||
-      (params.articleIds &&
-        params.articleIds.length > 0)
-        ? {
-            OR: [
-              ...(topicIds.length > 0
-                ? [
-                    {
-                      topicId: {
-                        in: topicIds,
-                      },
-                    },
-                  ]
-                : []),
-
-              ...(params.articleIds &&
-              params.articleIds.length > 0
-                ? [
-                    {
-                      articleId: {
-                        in:
-                          params.articleIds,
-                      },
-                    },
-                  ]
-                : []),
-            ],
           }
         : {}),
     };
 
-    const candidates =
-      await this.prisma.question.findMany({
-        where,
+    /**
+     * PRIORIDAD:
+     * 1) Si hay articleIds → SOLO esas preguntas
+     * 2) Si no, y hay topicIds → jerarquía de temas/subtemas
+     * 3) Si no hay ninguno → banco completo (sin filtro extra)
+     */
+    if (articleIds.length > 0) {
+      where.articleId = {
+        in: articleIds,
+      };
+    } else if (topicIds.length > 0) {
+      where.topicId = {
+        in: topicIds,
+      };
+    }
 
-        select: {
-          id: true,
-        },
-      });
+    const candidates = await this.prisma.question.findMany({
+      where,
+      select: {
+        id: true,
+      },
+    });
 
     if (candidates.length === 0) {
       return [];
     }
 
-    const ids =
-      candidates.map(
-        (question) =>
-          question.id,
-      );
+    const ids = candidates.map((question) => question.id);
 
     this.shuffleArray(ids);
 
-    const selectedIds =
-      ids.slice(
-        0,
-        params.count,
-      );
+    const selectedIds = ids.slice(0, params.count);
 
-    if (
-      selectedIds.length <
-      params.count
-    ) {
+    if (selectedIds.length < params.count) {
       return [];
     }
 
-    return this.getQuestionsByIds(
-      selectedIds,
-    );
+    return this.getQuestionsByIds(selectedIds);
   }
 
   // ============================================================
@@ -1618,17 +1617,46 @@ if (type === TestTypeDto.REAL) {
         0,
       );
 
-    // Puntuación:
+    // ============================================================
+    // PUNTUACIÓN
+    // ============================================================
+    //
     // Acierto = +1
     // Fallo   = -0,33
     // Blanco  = 0
+    //
+    // score:
+    // puntuación ponderada bruta.
+    //
+    // grade:
+    // nota final sobre 10.
+    //
+    // percentage:
+    // porcentaje ponderado equivalente.
+    //
+    // correctPercentage:
+    // porcentaje literal de respuestas correctas.
+    // ============================================================
+
     const score =
       correctCount -
       wrongCount * 0.33;
 
+    const grade =
+      totalQuestions > 0
+        ? (score / totalQuestions) *
+          10
+        : 0;
+
     const percentage =
       totalQuestions > 0
         ? (score / totalQuestions) *
+          100
+        : 0;
+
+    const correctPercentage =
+      totalQuestions > 0
+        ? (correctCount / totalQuestions) *
           100
         : 0;
 
@@ -1719,12 +1747,28 @@ if (type === TestTypeDto.REAL) {
       attemptId:
         finished.id,
 
+      // Puntuación ponderada bruta.
+      // Ejemplo: 7 aciertos, 2 fallos, 1 blanco = 6,34.
       score: Number(
         score.toFixed(2),
       ),
 
+      // Nota final sobre 10.
+      // Ejemplo: 7 aciertos, 2 fallos, 1 blanco
+      // en un test de 10 = 6,34 / 10.
+      grade: Number(
+        grade.toFixed(2),
+      ),
+
+      // Porcentaje ponderado.
       percentage: Number(
         percentage.toFixed(2),
+      ),
+
+      // Porcentaje literal de respuestas correctas.
+      // Ejemplo: 7 aciertos de 10 = 70 %.
+      correctPercentage: Number(
+        correctPercentage.toFixed(2),
       ),
 
       correctCount,

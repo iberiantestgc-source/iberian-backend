@@ -88,7 +88,7 @@ model Opposition {
   updatedAt   DateTime   @updatedAt
   questions   Question[]
   rankings    Ranking[]
-  syllabi     Syllabus[]
+  syllabi      Syllabus[]
   topics      Topic[]
 
   @@map("oppositions")
@@ -396,7 +396,7 @@ model Achievement {
   code             String            @unique
   name             String
   description      String
-  iconUrl          String?
+  iconUrl           String?
   xpReward         Int               @default(0)
   condition        Json
   isActive         Boolean           @default(true)
@@ -498,7 +498,7 @@ model Notification {
   type      String
   data      Json?
   isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   user User @relation(
     fields: [userId],
@@ -520,7 +520,7 @@ model Subscription {
   platform         SubscriptionPlatform?
   productId        String?
   autoRenew        Boolean               @default(true)
-  createdAt        DateTime              @default(now())
+  createdAt         DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
 
   user User @relation(
@@ -532,12 +532,13 @@ model Subscription {
 }
 
 model DailyQuestionUsage {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   userId        String
   date          DateTime
-  questionsUsed Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  questionsUsed Int       @default(0)
+  blockedUntil  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   user User @relation(
     fields: [userId],
