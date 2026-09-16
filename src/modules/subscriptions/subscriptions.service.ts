@@ -554,24 +554,41 @@ export class SubscriptionsService {
   // ============================================================
 
   async createCheckoutSession(userId: string) {
-    const secret = this.config.get<string>('STRIPE_SECRET_KEY');
-    const priceId = this.config.get<string>('STRIPE_PRICE_ID');
-    const successUrl = this.config.get<string>('STRIPE_SUCCESS_URL');
-    const cancelUrl = this.config.get<string>('STRIPE_CANCEL_URL');
+    const secret =
+      this.config.get<string>('STRIPE_SECRET_KEY')?.trim() ||
+      process.env.STRIPE_SECRET_KEY?.trim();
 
-    if (!secret || !priceId || !successUrl || !cancelUrl) {
+    const priceId =
+      this.config.get<string>('STRIPE_PRICE_ID')?.trim() ||
+      process.env.STRIPE_PRICE_ID?.trim();
+
+    const successUrl =
+      this.config.get<string>('STRIPE_SUCCESS_URL')?.trim() ||
+      process.env.STRIPE_SUCCESS_URL?.trim();
+
+    const cancelUrl =
+      this.config.get<string>('STRIPE_CANCEL_URL')?.trim() ||
+      process.env.STRIPE_CANCEL_URL?.trim();
+
+    const missing: string[] = [];
+    if (!secret) missing.push('STRIPE_SECRET_KEY');
+    if (!priceId) missing.push('STRIPE_PRICE_ID');
+    if (!successUrl) missing.push('STRIPE_SUCCESS_URL');
+    if (!cancelUrl) missing.push('STRIPE_CANCEL_URL');
+
+    if (missing.length > 0) {
       throw new ForbiddenException(
-        'Stripe no está configurado en el servidor (faltan variables de entorno).',
+        `Stripe no está configurado. Faltan: ${missing.join(', ')}`,
       );
     }
 
-    if (!secret.startsWith('sk_')) {
+    if (!secret!.startsWith('sk_')) {
       throw new ForbiddenException(
-        'STRIPE_SECRET_KEY no parece una clave secreta válida.',
+        'STRIPE_SECRET_KEY no parece una clave secreta válida (debe empezar por sk_test_ o sk_live_).',
       );
     }
 
-    if (!priceId.startsWith('price_')) {
+    if (!priceId!.startsWith('price_')) {
       throw new ForbiddenException(
         'STRIPE_PRICE_ID debe ser un Price ID (price_...), no un Product ID (prod_...).',
       );
@@ -597,7 +614,7 @@ export class SubscriptionsService {
       throw new ForbiddenException('Ya tienes Premium activo.');
     }
 
-    const stripe = new Stripe(secret);
+    const stripe = new Stripe(secret!);
 
     try {
       const session = await stripe.checkout.sessions.create({
@@ -606,12 +623,12 @@ export class SubscriptionsService {
         customer_email: user.email ?? undefined,
         line_items: [
           {
-            price: priceId,
+            price: priceId!,
             quantity: 1,
           },
         ],
         success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: cancelUrl,
+        cancel_url: cancelUrl!,
         allow_promotion_codes: true,
         metadata: {
           userId: user.id,
@@ -647,12 +664,12 @@ export class SubscriptionsService {
             customer_email: user.email ?? undefined,
             line_items: [
               {
-                price: priceId,
+                price: priceId!,
                 quantity: 1,
               },
             ],
             success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: cancelUrl,
+            cancel_url: cancelUrl!,
             allow_promotion_codes: true,
             metadata: {
               userId: user.id,
@@ -689,10 +706,12 @@ export class SubscriptionsService {
   // ============================================================
 
   async handleStripeWebhook(signature: string, rawBody: Buffer) {
-    const secret = this.config.get<string>('STRIPE_SECRET_KEY');
-    const webhookSecret = this.config.get<string>(
-      'STRIPE_WEBHOOK_SECRET',
-    );
+    const secret =
+      this.config.get<string>('STRIPE_SECRET_KEY')?.trim() ||
+      process.env.STRIPE_SECRET_KEY?.trim();
+    const webhookSecret =
+      this.config.get<string>('STRIPE_WEBHOOK_SECRET')?.trim() ||
+      process.env.STRIPE_WEBHOOK_SECRET?.trim();
 
     if (!secret) {
       throw new ForbiddenException(
@@ -735,8 +754,7 @@ export class SubscriptionsService {
     }
 
     if (event.type === 'checkout.session.completed') {
-      const session = event.data
-        .object as Stripe.Checkout.Session;
+      const session = event.data.object as Stripe.Checkout.Session;
 
       const userId = session.metadata?.userId;
 
@@ -782,8 +800,7 @@ export class SubscriptionsService {
     }
 
     if (event.type === 'customer.subscription.updated') {
-      const subscription = event.data
-        .object as Stripe.Subscription;
+      const subscription = event.data.object as Stripe.Subscription;
 
       const userId = subscription.metadata?.userId;
 
@@ -814,8 +831,7 @@ export class SubscriptionsService {
     }
 
     if (event.type === 'customer.subscription.deleted') {
-      const subscription = event.data
-        .object as Stripe.Subscription;
+      const subscription = event.data.object as Stripe.Subscription;
 
       const userId = subscription.metadata?.userId;
 
