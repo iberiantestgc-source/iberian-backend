@@ -355,44 +355,42 @@ export class TestsService {
     // ============================================================
 
     if (!questions || questions.length === 0) {
+      if (type === TestTypeDto.FAILED_ONLY) {
+        throw new BadRequestException(
+          'No tienes preguntas falladas para repasar. Haz tests y vuelve a intentarlo.',
+        );
+      }
+      if (type === TestTypeDto.FAVORITES) {
+        throw new BadRequestException(
+          'No tienes preguntas favoritas todavía.',
+        );
+      }
       throw new BadRequestException(
         'No se encontraron preguntas con los filtros indicados',
       );
     }
 
-    // Un test solicitado con N preguntas debe contener
-    // exactamente N preguntas.
-    //
-    // No permitimos crear silenciosamente un test incompleto.
-    if (questions.length < count) {
-      throw new BadRequestException(
-        `No hay suficientes preguntas disponibles para generar el test solicitado. Se necesitan ${count} preguntas y solo hay ${questions.length} disponibles.`,
-      );
-    }
-
-    // ============================================================
-    // 7. EVITAR DUPLICADOS
-    // ============================================================
-
     const uniqueQuestions = Array.from(
       new Map(
-        questions.map((question) => [
-          question.id,
-          question,
-        ]),
+        questions.map((question) => [question.id, question]),
       ).values(),
     );
 
-    if (uniqueQuestions.length < count) {
+    const allowPartial =
+      type === TestTypeDto.FAILED_ONLY ||
+      type === TestTypeDto.FAVORITES;
+
+    if (!allowPartial && uniqueQuestions.length < count) {
       throw new BadRequestException(
-        `No hay suficientes preguntas únicas para generar el test solicitado. Se necesitan ${count} preguntas y solo hay ${uniqueQuestions.length} preguntas únicas disponibles.`,
+        `No hay suficientes preguntas disponibles para generar el test solicitado. Se necesitan ${count} preguntas y solo hay ${uniqueQuestions.length} disponibles.`,
       );
     }
 
-    // Por seguridad, limitamos al número solicitado.
-    const finalQuestions =
-      uniqueQuestions.slice(0, count);
+    const take = allowPartial
+      ? Math.min(count, uniqueQuestions.length)
+      : count;
 
+    const finalQuestions = uniqueQuestions.slice(0, take);
     // ============================================================
     // 8. MEZCLAR PREGUNTAS
     // ============================================================
@@ -529,9 +527,8 @@ export class TestsService {
 
     await this.subscriptionsService.consumeQuestions(
       userId,
-      count,
+      finalQuestions.length,
     );
-
     // ============================================================
     // 11. DEVOLVER TEST
     // ============================================================
@@ -1918,17 +1915,7 @@ export class TestsService {
         params.count,
       );
 
-    if (
-      selectedIds.length <
-      params.count
-    ) {
-      return [];
-    }
-
-    return this.getQuestionsByIds(
-      selectedIds,
-    );
-  }
+    return this.getQuestionsByIds(selectedIds);  }
 
   // ============================================================
   // FAVORITAS
@@ -2042,13 +2029,6 @@ export class TestsService {
         0,
         params.count,
       );
-
-    if (
-      selectedIds.length <
-      params.count
-    ) {
-      return [];
-    }
 
     return this.getQuestionsByIds(
       selectedIds,
