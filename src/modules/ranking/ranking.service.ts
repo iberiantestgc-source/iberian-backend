@@ -1,13 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { SupabaseService } from '../users/supabase.service';
 
 @Injectable()
 export class RankingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly supabaseService: SupabaseService,
+  ) {}
 
-  /**
-   * Obtiene o crea el ranking global.
-   */
   async getOrCreateGlobalRanking(oppositionId?: string) {
     const name = oppositionId
       ? 'Ranking Global - Oposición'
@@ -35,12 +36,6 @@ export class RankingService {
     return ranking;
   }
 
-  /**
-   * Sincroniza todos los usuarios activos con el ranking.
-   *
-   * Esto garantiza que un usuario aparezca en el ranking aunque
-   * todavía no haya realizado ningún test y tenga 0 XP.
-   */
   async syncAllUsers(rankingId: string) {
     const users = await this.prisma.user.findMany({
       where: {
@@ -80,12 +75,6 @@ export class RankingService {
     await this.recalculatePositions(rankingId);
   }
 
-  /**
-   * Actualiza la puntuación de un usuario concreto.
-   *
-   * Se utiliza cuando el usuario gana XP después de realizar
-   * un test, conseguir un logro, etc.
-   */
   async updateUserScore(userId: string, oppositionId?: string) {
     const user = await this.prisma.user.findUnique({
       where: {
@@ -124,13 +113,6 @@ export class RankingService {
     await this.recalculatePositions(ranking.id);
   }
 
-  /**
-   * Recalcula las posiciones del ranking.
-   *
-   * Orden:
-   * 1. Mayor XP
-   * 2. En caso de empate, se mantiene un orden estable por ID.
-   */
   async recalculatePositions(rankingId: string) {
     const entries = await this.prisma.rankingEntry.findMany({
       where: {
@@ -164,25 +146,84 @@ export class RankingService {
   }
 
   /**
-   * Obtiene el Top N del ranking global.
-   *
-   * Antes de devolver los resultados sincronizamos todos los usuarios
-   * activos para garantizar que aparezcan también los que tienen 0 XP.
+   * plan público para el front: FREE | PREMIUM
    */
+  private resolvePublicPlan(
+    role: string,
+    sub?: { plan: string; status: string } | null,
+  ): 'FREE' | 'PREMIUM' {
+    if (
+      role === 'ADMIN' ||
+      role === 'SUPER_ADMIN' ||
+      role === 'PREMIUM'
+    ) {
+      return 'PREMIUM';
+    }
+
+    if (
+      sub &&
+      (sub.status === 'ACTIVE' || sub.status === 'TRIAL') &&
+      sub.plan !== 'FREE'
+    ) {
+      return 'PREMIUM';
+    }
+
+    return 'FREE';
+  }
+
+  private async resolveAvatarUrl(
+    avatarUrl: string | null,
+  ): Promise<string | null> {
+    if (!avatarUrl) {
+      return null;
+    }
+
+    if (avatarUrl.startsWith('http')) {
+      return avatarUrl;
+    }
+
+    try {
+      return await this.supabaseService.getSignedUrl(avatarUrl);
+    } catch {
+      return null;
+    }
+  }
+
+  private async mapUser(user: {
+    id: string;
+    name: string | null;
+    avatarUrl: string | null;
+    level: number;
+    xp: number;
+    role: string;
+    subscription?: { plan: string; status: string } | null;
+  }) {
+    const avatarUrl = await this.resolveAvatarUrl(user.avatarUrl);
+    const plan = this.resolvePublicPlan(
+      user.role,
+      user.subscription ?? null,
+    );
+
+    return {
+      id: user.id,
+      name: user.name,
+      avatarUrl,
+      level: user.level,
+      xp: user.xp,
+      role: user.role,
+      plan,
+    };
+  }
+
   async getLeaderboard(params: {
     oppositionId?: string;
     limit?: number;
     offset?: number;
   }) {
-    const {
-      oppositionId,
-      limit = 50,
-      offset = 0,
-    } = params;
+    const { oppositionId, limit = 50, offset = 0 } = params;
 
     const ranking = await this.getOrCreateGlobalRanking(oppositionId);
 
-    // Garantizar que todos los usuarios activos estén en el ranking.
     await this.syncAllUsers(ranking.id);
 
     const safeLimit = Math.min(Math.max(limit, 1), 100);
@@ -214,6 +255,13 @@ export class RankingService {
               avatarUrl: true,
               level: true,
               xp: true,
+              role: true,
+              subscription: {
+                select: {
+                  plan: true,
+                  status: true,
+                },
+              },
             },
           },
         },
@@ -229,39 +277,28 @@ export class RankingService {
       }),
     ]);
 
+    const mapped = await Promise.all(
+      entries.map(async (entry) => ({
+        id: entry.id,
+        position: entry.position,
+        score: entry.score,
+        user: await this.mapUser(entry.user),
+      })),
+    );
+
     return {
       rankingId: ranking.id,
       rankingName: ranking.name,
       total,
       limit: safeLimit,
       offset: safeOffset,
-
-      entries: entries.map((entry) => ({
-        id: entry.id,
-        position: entry.position,
-        score: entry.score,
-
-        user: {
-          id: entry.user.id,
-          name: entry.user.name,
-          avatarUrl: entry.user.avatarUrl,
-          level: entry.user.level,
-          xp: entry.user.xp,
-        },
-      })),
+      entries: mapped,
     };
   }
 
-  /**
-   * Obtiene la posición de un usuario concreto.
-   */
-  async getUserPosition(
-    userId: string,
-    oppositionId?: string,
-  ) {
+  async getUserPosition(userId: string, oppositionId?: string) {
     const ranking = await this.getOrCreateGlobalRanking(oppositionId);
 
-    // Garantizamos que todos los usuarios estén sincronizados.
     await this.syncAllUsers(ranking.id);
 
     const entry = await this.prisma.rankingEntry.findUnique({
@@ -279,6 +316,13 @@ export class RankingService {
             avatarUrl: true,
             level: true,
             xp: true,
+            role: true,
+            subscription: {
+              select: {
+                plan: true,
+                status: true,
+              },
+            },
           },
         },
       },
@@ -296,7 +340,7 @@ export class RankingService {
     return {
       position: entry.position,
       score: entry.score,
-      user: entry.user,
+      user: await this.mapUser(entry.user),
     };
   }
 }
