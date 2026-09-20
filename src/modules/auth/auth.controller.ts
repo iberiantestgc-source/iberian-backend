@@ -6,8 +6,10 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import {
+  ApiBearerAuth,
   ApiBody,
   ApiOperation,
   ApiResponse,
@@ -16,6 +18,8 @@ import {
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -85,6 +89,8 @@ export class AuthController {
   @Post('register')
   @ApiOperation({
     summary: 'Registrar nuevo usuario',
+    description:
+      'Crea la cuenta, envía email de verificación y devuelve tokens.',
   })
   @ApiResponse({
     status: HttpStatus.CREATED,
@@ -100,6 +106,66 @@ export class AuthController {
   })
   async register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
+  }
+
+  /**
+   * Verificar email con el token del enlace del correo.
+   *
+   * POST /api/v1/auth/verify-email
+   */
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verificar email',
+    description:
+      'Confirma el correo usando el token enviado por email (válido 24 h).',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        token: {
+          type: 'string',
+          description: 'Token JWT del enlace de verificación',
+        },
+      },
+      required: ['token'],
+    },
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Email verificado correctamente',
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: 'Token inválido o expirado',
+  })
+  async verifyEmail(@Body('token') token: string) {
+    return this.authService.verifyEmail(
+      typeof token === 'string' ? token.trim() : '',
+    );
+  }
+
+  /**
+   * Reenviar email de verificación (usuario logueado).
+   *
+   * POST /api/v1/auth/resend-verification
+   */
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reenviar email de verificación',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Correo reenviado',
+  })
+  async resendVerification(
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.authService.resendVerification(userId);
   }
 
   /**

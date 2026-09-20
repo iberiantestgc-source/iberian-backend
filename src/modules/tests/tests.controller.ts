@@ -80,10 +80,6 @@ class SubmitBlankAnswerDto {
   timeSpentMs?: number;
 }
 
-// ============================================================
-// CONTROLLER
-// ============================================================
-
 @ApiTags('tests')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -98,11 +94,9 @@ export class TestsController {
   // ==========================================================
 
   @Post('generate')
+  @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary:
-      'Generar un nuevo test (Motor único de tests)',
-    description:
-      'Recibe filtros → busca preguntas → mezcla → controla duplicados → devuelve el examen',
+    summary: 'Generar un nuevo test',
   })
   generate(
     @CurrentUser('id') userId: string,
@@ -121,8 +115,7 @@ export class TestsController {
   @Post('attempts/:attemptId/answer')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary:
-      'Enviar respuesta a una pregunta del test',
+    summary: 'Responder una pregunta del test',
   })
   submitAnswer(
     @CurrentUser('id') userId: string,
@@ -142,9 +135,7 @@ export class TestsController {
   // DEJAR PREGUNTA EN BLANCO
   // ==========================================================
 
-  @Post(
-    'attempts/:attemptId/answer/blank',
-  )
+  @Post('attempts/:attemptId/answer/blank')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:
@@ -169,9 +160,7 @@ export class TestsController {
   // FINALIZAR TEST
   // ==========================================================
 
-  @Post(
-    'attempts/:attemptId/finish',
-  )
+  @Post('attempts/:attemptId/finish')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary:

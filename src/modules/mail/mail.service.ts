@@ -260,4 +260,267 @@ export class MailService {
 
     return data;
   }
+
+  async sendEmailVerification(
+    email: string,
+    verifyToken: string,
+  ) {
+    const from =
+      this.configService.get<string>(
+        'MAIL_FROM',
+      ) || 'IBERIAN <onboarding@resend.dev>';
+
+    const webBase = (
+      this.configService.get<string>('APP_WEB_URL') ||
+      'https://iberian-app.vercel.app'
+    ).replace(/\/$/, '');
+
+    const verifyUrl =
+      `${webBase}/verify-email?token=${encodeURIComponent(
+        verifyToken,
+      )}`;
+
+    const deepLink =
+      `iberian://verify-email?token=${encodeURIComponent(
+        verifyToken,
+      )}`;
+
+    const { data, error } =
+      await this.resend.emails.send({
+        from,
+        to: [email],
+        subject: 'Verifica tu email · IBERIAN',
+        html: `
+          <div
+            style="
+              margin: 0;
+              padding: 40px 20px;
+              background-color: #0B1C2C;
+              font-family: Arial, Helvetica, sans-serif;
+            "
+          >
+            <div
+              style="
+                max-width: 600px;
+                margin: 0 auto;
+                background-color: #13253A;
+                border-radius: 16px;
+                overflow: hidden;
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+              "
+            >
+              <div
+                style="
+                  padding: 32px 30px 24px;
+                  text-align: center;
+                  border-bottom: 1px solid #1E3A56;
+                "
+              >
+                <div
+                  style="
+                    font-size: 32px;
+                    font-weight: 800;
+                    letter-spacing: 4px;
+                    color: #F5F7FA;
+                  "
+                >
+                  IBERIAN
+                </div>
+
+                <div
+                  style="
+                    margin-top: 8px;
+                    font-size: 13px;
+                    color: #8B9BB4;
+                    letter-spacing: 1px;
+                  "
+                >
+                  PREPARACIÓN · DISCIPLINA · OBJETIVO
+                </div>
+              </div>
+
+              <div
+                style="
+                  padding: 36px 30px;
+                  color: #F5F7FA;
+                "
+              >
+                <h1
+                  style="
+                    margin: 0 0 18px;
+                    font-size: 25px;
+                    line-height: 1.3;
+                    text-align: center;
+                    color: #F5F7FA;
+                  "
+                >
+                  Confirma tu correo
+                </h1>
+
+                <p
+                  style="
+                    margin: 0 0 18px;
+                    font-size: 15px;
+                    line-height: 1.7;
+                    color: #C7D2E0;
+                  "
+                >
+                  Gracias por registrarte en
+                  <strong style="color: #F5F7FA;">IBERIAN</strong>.
+                  Confirma que este email es tuyo para
+                  activar la cuenta.
+                </p>
+
+                <p
+                  style="
+                    margin: 0 0 28px;
+                    font-size: 15px;
+                    line-height: 1.7;
+                    color: #C7D2E0;
+                  "
+                >
+                  Pulsa el siguiente botón para verificar
+                  tu correo electrónico:
+                </p>
+
+                <div
+                  style="
+                    text-align: center;
+                    margin: 32px 0;
+                  "
+                >
+                  <a
+                    href="${verifyUrl}"
+                    style="
+                      display: inline-block;
+                      padding: 15px 28px;
+                      background-color: #00A878;
+                      color: #FFFFFF;
+                      text-decoration: none;
+                      border-radius: 10px;
+                      font-size: 15px;
+                      font-weight: 800;
+                    "
+                  >
+                    Verificar email
+                  </a>
+                </div>
+
+                <div
+                  style="
+                    margin: 28px 0;
+                    padding: 18px;
+                    background-color: #0B1C2C;
+                    border-radius: 10px;
+                    border-left: 3px solid #00A878;
+                  "
+                >
+                  <p
+                    style="
+                      margin: 0;
+                      font-size: 14px;
+                      line-height: 1.6;
+                      color: #C7D2E0;
+                    "
+                  >
+                    Este enlace será válido durante
+                    <strong style="color: #C9A227;">
+                      24 horas
+                    </strong>.
+                  </p>
+                </div>
+
+                <p
+                  style="
+                    margin: 0 0 18px;
+                    font-size: 14px;
+                    line-height: 1.7;
+                    color: #8B9BB4;
+                  "
+                >
+                  Si no te has registrado en IBERIAN,
+                  puedes ignorar este correo.
+                </p>
+
+                <p
+                  style="
+                    margin: 24px 0 0;
+                    font-size: 14px;
+                    line-height: 1.7;
+                    color: #8B9BB4;
+                  "
+                >
+                  Si el botón no funciona, copia y pega
+                  este enlace:
+                </p>
+
+                <p
+                  style="
+                    margin: 10px 0 0;
+                    word-break: break-all;
+                    font-size: 12px;
+                    line-height: 1.6;
+                    color: #C9A227;
+                  "
+                >
+                  ${verifyUrl}
+                </p>
+
+                <p
+                  style="
+                    margin: 16px 0 0;
+                    word-break: break-all;
+                    font-size: 11px;
+                    line-height: 1.6;
+                    color: #687B92;
+                  "
+                >
+                  App: ${deepLink}
+                </p>
+              </div>
+
+              <div
+                style="
+                  padding: 24px 30px;
+                  background-color: #0B1C2C;
+                  text-align: center;
+                  border-top: 1px solid #1E3A56;
+                "
+              >
+                <p
+                  style="
+                    margin: 0 0 8px;
+                    font-size: 13px;
+                    font-weight: 700;
+                    color: #F5F7FA;
+                  "
+                >
+                  IBERIAN
+                </p>
+
+                <p
+                  style="
+                    margin: 0;
+                    font-size: 11px;
+                    line-height: 1.6;
+                    color: #687B92;
+                  "
+                >
+                  Este es un correo automático de IBERIAN.
+                  No respondas a este mensaje.
+                </p>
+              </div>
+            </div>
+          </div>
+        `,
+      });
+
+    if (error) {
+      throw new Error(
+        `Error enviando email de verificación: ${error.message}`,
+      );
+    }
+
+    return data;
+  }
 }

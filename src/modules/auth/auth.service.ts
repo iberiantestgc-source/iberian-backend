@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -27,6 +28,7 @@ export class AuthService {
 
   /**
    * Registrar un nuevo usuario.
+   * Envía email de verificación (no bloquea el registro si falla el mail).
    */
   async register(dto: RegisterDto) {
     const email = dto.email.trim().toLowerCase();
@@ -53,6 +55,7 @@ export class AuthService {
         email,
         passwordHash,
         name: dto.name?.trim() || undefined,
+        emailVerified: false,
 
         subscription: {
           create: {
@@ -69,9 +72,36 @@ export class AuthService {
         role: true,
         xp: true,
         level: true,
+        emailVerified: true,
         createdAt: true,
       },
     });
+
+    try {
+      const verifyToken = await this.jwtService.signAsync(
+        {
+          sub: user.id,
+          email: user.email,
+          purpose: 'email_verify',
+        },
+        {
+          secret: this.configService.getOrThrow<string>(
+            'JWT_SECRET',
+          ),
+          expiresIn: '24h',
+        },
+      );
+
+      await this.mailService.sendEmailVerification(
+        user.email,
+        verifyToken,
+      );
+    } catch (err) {
+      console.error(
+        '[IBERIAN] No se pudo enviar email de verificación:',
+        err,
+      );
+    }
 
     const tokens = await this.generateTokens(
       user.id,
@@ -82,6 +112,132 @@ export class AuthService {
     return {
       user,
       ...tokens,
+      message:
+        'Cuenta creada. Revisa tu correo para verificar el email (válido 24 h).',
+    };
+  }
+
+  /**
+   * Confirmar email con el token del enlace.
+   */
+  async verifyEmail(token: string) {
+    if (!token?.trim()) {
+      throw new BadRequestException(
+        'Token de verificación inválido',
+      );
+    }
+
+    let payload: {
+      sub?: string;
+      email?: string;
+      purpose?: string;
+    };
+
+    try {
+      payload = await this.jwtService.verifyAsync(
+        token.trim(),
+        {
+          secret: this.configService.getOrThrow<string>(
+            'JWT_SECRET',
+          ),
+        },
+      );
+    } catch {
+      throw new UnauthorizedException(
+        'Token de verificación inválido o expirado',
+      );
+    }
+
+    if (payload.purpose !== 'email_verify' || !payload.sub) {
+      throw new UnauthorizedException(
+        'Token de verificación inválido',
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: {
+        id: payload.sub,
+      },
+    });
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException(
+        'Usuario no válido',
+      );
+    }
+
+    if (user.emailVerified) {
+      return {
+        message: 'El email ya estaba verificado',
+        emailVerified: true,
+      };
+    }
+
+    await this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        emailVerified: true,
+      },
+    });
+
+    return {
+      message: 'Email verificado correctamente',
+      emailVerified: true,
+    };
+  }
+
+  /**
+   * Reenviar email de verificación (usuario autenticado).
+   */
+  async resendVerification(userId: string) {
+    if (!userId?.trim()) {
+      throw new UnauthorizedException(
+        'Usuario no válido',
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+    });
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException(
+        'Usuario no válido',
+      );
+    }
+
+    if (user.emailVerified) {
+      return {
+        message: 'El email ya está verificado',
+      };
+    }
+
+    const verifyToken = await this.jwtService.signAsync(
+      {
+        sub: user.id,
+        email: user.email,
+        purpose: 'email_verify',
+      },
+      {
+        secret: this.configService.getOrThrow<string>(
+          'JWT_SECRET',
+        ),
+        expiresIn: '24h',
+      },
+    );
+
+    await this.mailService.sendEmailVerification(
+      user.email,
+      verifyToken,
+    );
+
+    return {
+      message:
+        'Hemos enviado un nuevo correo de verificación',
     };
   }
 
@@ -128,6 +284,7 @@ export class AuthService {
         role: user.role,
         xp: user.xp,
         level: user.level,
+        emailVerified: user.emailVerified,
       },
       ...tokens,
     };
